@@ -5,6 +5,7 @@ import {
   useState,
   useEffect,
   useCallback,
+  useRef,
   type ReactNode,
 } from "react";
 import apiClient, {
@@ -286,28 +287,47 @@ interface DataState {
 
 const DataContext = createContext<DataState | null>(null);
 
+const LIST_CACHE_TTL_MS = 5 * 60 * 1000;
+
 export function DataProvider({ children }: { children: ReactNode }) {
   const [warranties, setWarranties] = useState<Warranty[]>([]);
   const [complaints, setComplaints] = useState<Complaint[]>([]);
   const [loadingWarranties, setLoadingWarranties] = useState(false);
   const [loadingComplaints, setLoadingComplaints] = useState(false);
+  const warrantiesLoadedAt = useRef(0);
+  const complaintsLoadedAt = useRef(0);
+  const warrantiesRequest = useRef<Promise<void> | null>(null);
+  const complaintsRequest = useRef<Promise<void> | null>(null);
 
   // ── Warranties ──
 
   const fetchWarranties = useCallback(async (filters?: any) => {
-    try {
-      setLoadingWarranties(true);
-      const response = await getWarranties(filters);
-      // backend returns { data: { warranties: [...] } } or { data: [...] }
-      const raw = response.data?.data;
-      const list: any[] = Array.isArray(raw) ? raw : (raw?.warranties ?? []);
-      setWarranties(list.map(mapWarranty).sort(compareWarrantySerialNumbers));
-    } catch (err: any) {
-      const message = err.response?.data?.error ?? err.response?.data?.detail ?? "Failed to fetch warranties";
-      toast.error(message);
-    } finally {
-      setLoadingWarranties(false);
+    const isUnfiltered = !filters || Object.keys(filters).length === 0;
+    const cacheIsFresh = Date.now() - warrantiesLoadedAt.current < LIST_CACHE_TTL_MS;
+    if (isUnfiltered && (cacheIsFresh || warrantiesRequest.current)) {
+      return warrantiesRequest.current ?? Promise.resolve();
     }
+
+    const request = (async () => {
+      try {
+        setLoadingWarranties(true);
+        const response = await getWarranties(filters);
+        // backend returns { data: { warranties: [...] } } or { data: [...] }
+        const raw = response.data?.data;
+        const list: any[] = Array.isArray(raw) ? raw : (raw?.warranties ?? []);
+        setWarranties(list.map(mapWarranty).sort(compareWarrantySerialNumbers));
+        if (isUnfiltered) warrantiesLoadedAt.current = Date.now();
+      } catch (err: any) {
+        const message = err.response?.data?.error ?? err.response?.data?.detail ?? "Failed to fetch warranties";
+        toast.error(message);
+      } finally {
+        setLoadingWarranties(false);
+        if (isUnfiltered) warrantiesRequest.current = null;
+      }
+    })();
+
+    if (isUnfiltered) warrantiesRequest.current = request;
+    return request;
   }, []);
 
   const addWarranty = useCallback(async (formData: FormData): Promise<Warranty> => {
@@ -316,6 +336,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
       const raw = response.data?.data ?? response.data;
       const warranty = mapWarranty(raw);
       setWarranties((prev) => [...prev, warranty].sort(compareWarrantySerialNumbers));
+      warrantiesLoadedAt.current = Date.now();
       toast.success("Warranty registered successfully");
       return warranty;
     } catch (err: any) {
@@ -328,18 +349,31 @@ export function DataProvider({ children }: { children: ReactNode }) {
   // ── Complaints ──
 
   const fetchComplaints = useCallback(async (filters?: any) => {
-    try {
-      setLoadingComplaints(true);
-      const response = await getComplaints(filters);
-      const raw = response.data?.data;
-      const list: any[] = Array.isArray(raw) ? raw : (raw?.complaints ?? []);
-      setComplaints(list.map(mapComplaint).sort(compareComplaintIdsDescending));
-    } catch (err: any) {
-      const message = err.response?.data?.error ?? err.response?.data?.detail ?? "Failed to fetch complaints";
-      toast.error(message);
-    } finally {
-      setLoadingComplaints(false);
+    const isUnfiltered = !filters || Object.keys(filters).length === 0;
+    const cacheIsFresh = Date.now() - complaintsLoadedAt.current < LIST_CACHE_TTL_MS;
+    if (isUnfiltered && (cacheIsFresh || complaintsRequest.current)) {
+      return complaintsRequest.current ?? Promise.resolve();
     }
+
+    const request = (async () => {
+      try {
+        setLoadingComplaints(true);
+        const response = await getComplaints(filters);
+        const raw = response.data?.data;
+        const list: any[] = Array.isArray(raw) ? raw : (raw?.complaints ?? []);
+        setComplaints(list.map(mapComplaint).sort(compareComplaintIdsDescending));
+        if (isUnfiltered) complaintsLoadedAt.current = Date.now();
+      } catch (err: any) {
+        const message = err.response?.data?.error ?? err.response?.data?.detail ?? "Failed to fetch complaints";
+        toast.error(message);
+      } finally {
+        setLoadingComplaints(false);
+        if (isUnfiltered) complaintsRequest.current = null;
+      }
+    })();
+
+    if (isUnfiltered) complaintsRequest.current = request;
+    return request;
   }, []);
 
   const addComplaint = useCallback(async (formData: FormData): Promise<Complaint> => {
@@ -348,6 +382,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
       const raw = response.data?.data ?? response.data;
       const complaint = mapComplaint(raw);
       setComplaints((prev) => [...prev, complaint].sort(compareComplaintIdsDescending));
+      complaintsLoadedAt.current = Date.now();
       toast.success("Complaint registered successfully");
       return complaint;
     } catch (err: any) {
@@ -406,6 +441,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
             return updated;
           })
         );
+        complaintsLoadedAt.current = Date.now();
         toast.success("Complaint updated");
       } catch (err: any) {
         const message = err.response?.data?.error ?? err.response?.data?.detail ?? "Failed to update complaint";
@@ -444,6 +480,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
             };
           })
         );
+          complaintsLoadedAt.current = Date.now();
         toast.success("Complaint resolved");
       } catch (err: any) {
         const message = err.response?.data?.error ?? err.response?.data?.detail ?? "Failed to resolve complaint";
