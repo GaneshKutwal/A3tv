@@ -1,0 +1,42 @@
+# Environment and secrets
+.env
+.env.*
+!.env.example
+.dev.vars
+
+# Python local environment and generated files
+**/venv/
+**/.venv/
+**/__pycache__/
+*.py[cod]
+*.pyo
+
+# Local uploaded files and runtime data
+backend/uploads/
+uploads/
+logs/
+*.log
+
+# JavaScript dependencies and generated output
+**/node_modules/
+**/dist/
+**/dist-ssr/
+**/.output/
+**/.vinxi/
+**/.tanstack/
+**/.nitro/
+**/.wrangler/
+package-lock.json
+
+# Local documentation and planning notes
+*.md
+
+# Editor and operating-system files
+.vscode/
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db
+*.suo
+*.user
+*.swp
