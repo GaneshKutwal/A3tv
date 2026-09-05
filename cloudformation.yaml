@@ -1,14 +1,7 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: >
-  A3 Television Warranty & Complaint Hub — Full AWS Stack
-  Resources: DynamoDB | S3 (storage + frontend) | Lambda (FastAPI + mangum)
-  | API Gateway (REST) | CloudFront | IAM | CloudWatch Logs
+Description: A3 Television Warranty & Complaint Hub AWS stack
 
-# ─────────────────────────────────────────────────────────────────────────────
-# PARAMETERS
-# ─────────────────────────────────────────────────────────────────────────────
 Parameters:
-
   Environment:
     Type: String
     Default: production
@@ -17,22 +10,32 @@ Parameters:
 
   LambdaCodeBucket:
     Type: String
-    Description: >
-      Name of the S3 bucket where your backend Lambda zip is uploaded.
-      (Run deploy.ps1 to package and upload automatically.)
+    Description: S3 bucket containing the Lambda deployment package
 
   LambdaCodeKey:
     Type: String
     Default: backend/lambda.zip
-    Description: S3 object key of the Lambda zip file
+    Description: S3 object key for the Lambda deployment package
 
   JWTSecret:
     Type: String
     NoEcho: true
     MinLength: 32
-    Description: >
-      JWT signing secret - minimum 32 characters.
-      Generate: python -c "import secrets; print(secrets.token_hex(32))"
+    Description: Secret used only for local/custom JWT compatibility
+
+  CognitoUserPoolId:
+    Type: String
+    Default: ap-south-1_MFC0x3rMG
+    Description: Existing Cognito User Pool ID
+
+  CognitoUserPoolArn:
+    Type: String
+    Default: arn:aws:cognito-idp:ap-south-1:704984106908:userpool/ap-south-1_MFC0x3rMG
+    Description: Existing Cognito User Pool ARN
+
+  CognitoClientId:
+    Type: String
+    Description: Cognito web app client ID without a client secret
 
   DynamoDBTableName:
     Type: String
@@ -43,24 +46,14 @@ Parameters:
     Type: Number
     Default: 512
     AllowedValues: [256, 512, 1024, 2048]
-    Description: Lambda memory in MB
 
   LambdaTimeoutSeconds:
     Type: Number
     Default: 29
     MinValue: 10
     MaxValue: 29
-    Description: Lambda timeout (max 29s for API Gateway integration)
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# RESOURCES
-# ─────────────────────────────────────────────────────────────────────────────
 Resources:
-
-  # ===========================================================================
-  # 1. DYNAMODB TABLE
-  # ===========================================================================
   WarrantyComplaintTable:
     Type: AWS::DynamoDB::Table
     DeletionPolicy: Retain
@@ -100,17 +93,17 @@ Resources:
           Value: A3TV-WarrantyHub
         - Key: Environment
           Value: !Ref Environment
+        - Key: ManagedBy
+          Value: CloudFormation
+        - Key: Purpose
+          Value: WarrantyAndComplaintData
 
-
-  # ===========================================================================
-  # 2. S3 BUCKET - File Storage (Invoices + Attachments)
-  # ===========================================================================
   FileStorageBucket:
     Type: AWS::S3::Bucket
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
     Properties:
-      BucketName: !Sub 'a3tv-storage-${AWS::AccountId}'
+      BucketName: !Sub a3tv-storage-${AWS::AccountId}
       PublicAccessBlockConfiguration:
         BlockPublicAcls: true
         BlockPublicPolicy: true
@@ -136,359 +129,349 @@ Resources:
       Tags:
         - Key: Project
           Value: A3TV-WarrantyHub
-        - Key: Purpose
-          Value: InvoicesAndAttachments
         - Key: Environment
           Value: !Ref Environment
+        - Key: ManagedBy
+          Value: CloudFormation
+        - Key: Purpose
+          Value: InvoicesAndAttachments
 
+  FrontendBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub a3tv-frontend-${AWS::AccountId}
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      Tags:
+        - Key: Project
+          Value: A3TV-WarrantyHub
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: ManagedBy
+          Value: CloudFormation
+        - Key: Purpose
+          Value: FrontendStaticFiles
 
-#   # ===========================================================================
-#   # 3. S3 BUCKET - Frontend Static Files
-#   # ===========================================================================
-#   FrontendBucket:
-#     Type: AWS::S3::Bucket
-#     Properties:
-#       BucketName: !Sub 'a3tv-frontend-${AWS::AccountId}'
-#       PublicAccessBlockConfiguration:
-#         BlockPublicAcls: true
-#         BlockPublicPolicy: true
-#         IgnorePublicAcls: true
-#         RestrictPublicBuckets: true
-#       Tags:
-#         - Key: Project
-#           Value: A3TV-WarrantyHub
-#         - Key: Purpose
-#           Value: FrontendStaticFiles
-#         - Key: Environment
-#           Value: !Ref Environment
-# 
-#   FrontendOAC:
-#     Type: AWS::CloudFront::OriginAccessControl
-#     Properties:
-#       OriginAccessControlConfig:
-#         Name: !Sub 'a3tv-oac-${AWS::StackName}'
-#         Description: OAC for A3TV frontend bucket
-#         OriginAccessControlOriginType: s3
-#         SigningBehavior: always
-#         SigningProtocol: sigv4
-# 
-#   FrontendBucketPolicy:
-#     Type: AWS::S3::BucketPolicy
-#     Properties:
-#       Bucket: !Ref FrontendBucket
-#       PolicyDocument:
-#         Version: '2012-10-17'
-#         Statement:
-#           - Sid: AllowCloudFrontOACRead
-#             Effect: Allow
-#             Principal:
-#               Service: cloudfront.amazonaws.com
-#             Action: s3:GetObject
-#             Resource: !Sub '${FrontendBucket.Arn}/*'
-#             Condition:
-#               StringEquals:
-#                 AWS:SourceArn: !Sub 'arn:aws:cloudfront::${AWS::AccountId}:distribution/${CloudFrontDistribution}'
-# 
-# 
-#   # ===========================================================================
-#   # 4. CLOUDFRONT DISTRIBUTION - Frontend CDN
-#   # ===========================================================================
-#   CloudFrontDistribution:
-#     Type: AWS::CloudFront::Distribution
-#     Properties:
-#       DistributionConfig:
-#         Enabled: true
-#         Comment: !Sub 'A3TV Warranty Hub Frontend (${Environment})'
-#         DefaultRootObject: index.html
-#         HttpVersion: http2
-#         PriceClass: PriceClass_100
-#         Origins:
-#           - Id: FrontendS3Origin
-#             DomainName: !GetAtt FrontendBucket.RegionalDomainName
-#             OriginAccessControlId: !GetAtt FrontendOAC.Id
-#             S3OriginConfig:
-#               OriginAccessIdentity: ''
-#         DefaultCacheBehavior:
-#           TargetOriginId: FrontendS3Origin
-#           ViewerProtocolPolicy: redirect-to-https
-#           AllowedMethods: [GET, HEAD, OPTIONS]
-#           CachedMethods: [GET, HEAD]
-#           Compress: true
-#           CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
-#         CustomErrorResponses:
-#           - ErrorCode: 403
-#             ResponseCode: 200
-#             ResponsePagePath: /index.html
-#             ErrorCachingMinTTL: 0
-#           - ErrorCode: 404
-#             ResponseCode: 200
-#             ResponsePagePath: /index.html
-#             ErrorCachingMinTTL: 0
-#       Tags:
-#         - Key: Project
-#           Value: A3TV-WarrantyHub
-#         - Key: Environment
-#           Value: !Ref Environment
-# 
-# 
-#   # ===========================================================================
-#   # 5. IAM ROLE - Lambda Execution
-#   # ===========================================================================
-#   LambdaExecutionRole:
-#     Type: AWS::IAM::Role
-#     Properties:
-#       RoleName: !Sub 'a3tv-lambda-role-${AWS::StackName}'
-#       AssumeRolePolicyDocument:
-#         Version: '2012-10-17'
-#         Statement:
-#           - Effect: Allow
-#             Principal:
-#               Service: lambda.amazonaws.com
-#             Action: sts:AssumeRole
-#       ManagedPolicyArns:
-#         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
-#       Policies:
-# 
-#         - PolicyName: DynamoDBTableAccess
-#           PolicyDocument:
-#             Version: '2012-10-17'
-#             Statement:
-#               - Effect: Allow
-#                 Action:
-#                   - dynamodb:GetItem
-#                   - dynamodb:PutItem
-#                   - dynamodb:UpdateItem
-#                   - dynamodb:DeleteItem
-#                   - dynamodb:Query
-#                   - dynamodb:Scan
-#                   - dynamodb:BatchGetItem
-#                   - dynamodb:BatchWriteItem
-#                 Resource:
-#                   - !GetAtt WarrantyComplaintTable.Arn
-#                   - !Sub '${WarrantyComplaintTable.Arn}/index/*'
-# 
-#         - PolicyName: S3StorageBucketAccess
-#           PolicyDocument:
-#             Version: '2012-10-17'
-#             Statement:
-#               - Effect: Allow
-#                 Action:
-#                   - s3:GetObject
-#                   - s3:PutObject
-#                   - s3:DeleteObject
-#                   - s3:GetObjectVersion
-#                 Resource: !Sub '${FileStorageBucket.Arn}/*'
-#               - Effect: Allow
-#                 Action:
-#                   - s3:ListBucket
-#                   - s3:GetBucketLocation
-#                 Resource: !GetAtt FileStorageBucket.Arn
-# 
-# 
-#   # ===========================================================================
-#   # 6. LAMBDA FUNCTION - FastAPI backend via mangum
-#   # ===========================================================================
-#   BackendLambda:
-#     Type: AWS::Lambda::Function
-#     Properties:
-#       FunctionName: !Sub 'a3tv-warranty-hub-${Environment}'
-#       Description: A3TV Warranty & Complaint Hub - FastAPI via mangum
-#       Runtime: python3.11
-#       Handler: app.handler
-#       Role: !GetAtt LambdaExecutionRole.Arn
-#       Code:
-#         S3Bucket: !Ref LambdaCodeBucket
-#         S3Key: !Ref LambdaCodeKey
-#       MemorySize: !Ref LambdaMemoryMB
-#       Timeout: !Ref LambdaTimeoutSeconds
-#       Environment:
-#         Variables:
-#           ENVIRONMENT: !Ref Environment
-#           DYNAMODB_TABLE_NAME: !Ref DynamoDBTableName
-#           DYNAMODB_LOCAL: 'false'
-#           DYNAMODB_ENDPOINT: ''
-#           USE_S3_STORAGE: 'true'
-#           LOCAL_FILE_STORAGE: 'false'
-#           S3_BUCKET_NAME: !Ref FileStorageBucket
-#           S3_INVOICES_BUCKET: !Ref FileStorageBucket
-#           S3_ATTACHMENTS_BUCKET: !Ref FileStorageBucket
-#           S3_PRESIGNED_URL_EXPIRATION: '3600'
-#           JWT_SECRET: !Ref JWTSecret
-#           JWT_ALGORITHM: HS256
-#           JWT_EXPIRATION_HOURS: '24'
-#           CORS_ORIGINS: !Sub 'https://${CloudFrontDistribution.DomainName}'
-#       Tags:
-#         - Key: Project
-#           Value: A3TV-WarrantyHub
-#         - Key: Environment
-#           Value: !Ref Environment
-# 
-#   LambdaLogGroup:
-#     Type: AWS::Logs::LogGroup
-#     Properties:
-#       LogGroupName: !Sub '/aws/lambda/a3tv-warranty-hub-${Environment}'
-#       RetentionInDays: 30
-# 
-# 
-#   # ===========================================================================
-#   # 7. API GATEWAY - REST API with Lambda Proxy
-#   # ===========================================================================
-#   ApiGateway:
-#     Type: AWS::ApiGateway::RestApi
-#     Properties:
-#       Name: !Sub 'a3tv-warranty-hub-api-${Environment}'
-#       Description: A3 Television Warranty & Complaint Hub REST API
-#       EndpointConfiguration:
-#         Types: [REGIONAL]
-#       Tags:
-#         - Key: Project
-#           Value: A3TV-WarrantyHub
-# 
-#   ApiProxyResource:
-#     Type: AWS::ApiGateway::Resource
-#     Properties:
-#       RestApiId: !Ref ApiGateway
-#       ParentId: !GetAtt ApiGateway.RootResourceId
-#       PathPart: '{proxy+}'
-# 
-#   ApiProxyAnyMethod:
-#     Type: AWS::ApiGateway::Method
-#     Properties:
-#       RestApiId: !Ref ApiGateway
-#       ResourceId: !Ref ApiProxyResource
-#       HttpMethod: ANY
-#       AuthorizationType: NONE
-#       Integration:
-#         Type: AWS_PROXY
-#         IntegrationHttpMethod: POST
-#         Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BackendLambda.Arn}/invocations'
-# 
-#   ApiRootAnyMethod:
-#     Type: AWS::ApiGateway::Method
-#     Properties:
-#       RestApiId: !Ref ApiGateway
-#       ResourceId: !GetAtt ApiGateway.RootResourceId
-#       HttpMethod: ANY
-#       AuthorizationType: NONE
-#       Integration:
-#         Type: AWS_PROXY
-#         IntegrationHttpMethod: POST
-#         Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BackendLambda.Arn}/invocations'
-# 
-#   ApiProxyOptionsMethod:
-#     Type: AWS::ApiGateway::Method
-#     Properties:
-#       RestApiId: !Ref ApiGateway
-#       ResourceId: !Ref ApiProxyResource
-#       HttpMethod: OPTIONS
-#       AuthorizationType: NONE
-#       Integration:
-#         Type: MOCK
-#         RequestTemplates:
-#           application/json: '{"statusCode": 200}'
-#         IntegrationResponses:
-#           - StatusCode: '200'
-#             ResponseParameters:
-#               method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key'"
-#               method.response.header.Access-Control-Allow-Methods: "'DELETE,GET,HEAD,OPTIONS,PATCH,POST,PUT'"
-#               method.response.header.Access-Control-Allow-Origin: "'*'"
-#             ResponseTemplates:
-#               application/json: ''
-#         PassthroughBehavior: WHEN_NO_MATCH
-#       MethodResponses:
-#         - StatusCode: '200'
-#           ResponseModels:
-#             application/json: Empty
-#           ResponseParameters:
-#             method.response.header.Access-Control-Allow-Headers: false
-#             method.response.header.Access-Control-Allow-Methods: false
-#             method.response.header.Access-Control-Allow-Origin: false
-# 
-#   ApiDeployment:
-#     Type: AWS::ApiGateway::Deployment
-#     DependsOn:
-#       - ApiProxyAnyMethod
-#       - ApiRootAnyMethod
-#       - ApiProxyOptionsMethod
-#     Properties:
-#       RestApiId: !Ref ApiGateway
-# 
-#   ApiStage:
-#     Type: AWS::ApiGateway::Stage
-#     Properties:
-#       RestApiId: !Ref ApiGateway
-#       DeploymentId: !Ref ApiDeployment
-#       StageName: prod
-#       Description: Production stage
-#       MethodSettings:
-#         - ResourcePath: '/*'
-#           HttpMethod: '*'
-#           MetricsEnabled: true
-#           LoggingLevel: INFO
-#           DataTraceEnabled: false
-#       AccessLogSetting:
-#         DestinationArn: !GetAtt ApiAccessLogGroup.Arn
-# 
-#   ApiAccessLogGroup:
-#     Type: AWS::Logs::LogGroup
-#     Properties:
-#       LogGroupName: !Sub '/aws/apigateway/a3tv-warranty-hub-${Environment}'
-#       RetentionInDays: 30
-# 
-#   LambdaApiGatewayPermission:
-#     Type: AWS::Lambda::Permission
-#     Properties:
-#       FunctionName: !GetAtt BackendLambda.Arn
-#       Action: lambda:InvokeFunction
-#       Principal: apigateway.amazonaws.com
-#       SourceArn: !Sub 'arn:aws:apigateway:${AWS::Region}::/restapis/${ApiGateway}/*'
-# 
+  FrontendOriginAccessIdentity:
+    Type: AWS::CloudFront::CloudFrontOriginAccessIdentity
+    Properties:
+      CloudFrontOriginAccessIdentityConfig:
+        Comment: !Sub A3TV frontend OAI (${Environment})
 
-# ─────────────────────────────────────────────────────────────────────────────
-# OUTPUTS  (visible in CloudFormation console after deploy)
-# ─────────────────────────────────────────────────────────────────────────────
+  CloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: !Sub A3TV Warranty Hub Frontend (${Environment})
+        DefaultRootObject: index.html
+        PriceClass: PriceClass_100
+        Origins:
+          - Id: FrontendS3Origin
+            DomainName: !GetAtt FrontendBucket.RegionalDomainName
+            S3OriginConfig:
+              OriginAccessIdentity: !Sub origin-access-identity/cloudfront/${FrontendOriginAccessIdentity}
+        DefaultCacheBehavior:
+          TargetOriginId: FrontendS3Origin
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: [GET, HEAD, OPTIONS]
+          CachedMethods: [GET, HEAD]
+          Compress: true
+          ForwardedValues:
+            QueryString: false
+            Cookies:
+              Forward: none
+        CustomErrorResponses:
+          - ErrorCode: 403
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+            ErrorCachingMinTTL: 0
+          - ErrorCode: 404
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+            ErrorCachingMinTTL: 0
+      Tags:
+        - Key: Project
+          Value: A3TV-WarrantyHub
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: ManagedBy
+          Value: CloudFormation
+        - Key: Purpose
+          Value: FrontendContentDelivery
+
+  FrontendBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref FrontendBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !Sub arn:aws:iam::cloudfront:user/CloudFront Origin Access Identity ${FrontendOriginAccessIdentity}
+            Action: s3:GetObject
+            Resource: !Sub ${FrontendBucket.Arn}/*
+
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub a3tv-lambda-role-${AWS::StackName}
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Tags:
+        - Key: Project
+          Value: A3TV-WarrantyHub
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: ManagedBy
+          Value: CloudFormation
+        - Key: Purpose
+          Value: LambdaExecution
+      Policies:
+        - PolicyName: DynamoDBTableAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:DeleteItem
+                  - dynamodb:Query
+                  - dynamodb:Scan
+                  - dynamodb:BatchGetItem
+                  - dynamodb:BatchWriteItem
+                Resource:
+                  - !GetAtt WarrantyComplaintTable.Arn
+                  - !Sub ${WarrantyComplaintTable.Arn}/index/*
+        - PolicyName: S3StorageBucketAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                  - s3:GetObjectVersion
+                Resource: !Sub ${FileStorageBucket.Arn}/*
+              - Effect: Allow
+                Action:
+                  - s3:ListBucket
+                  - s3:GetBucketLocation
+                Resource: !GetAtt FileStorageBucket.Arn
+
+  BackendLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub a3tv-warranty-hub-${Environment}
+      Description: A3TV Warranty & Complaint Hub FastAPI backend
+      Runtime: python3.11
+      Handler: app.handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Code:
+        S3Bucket: !Ref LambdaCodeBucket
+        S3Key: !Ref LambdaCodeKey
+      MemorySize: !Ref LambdaMemoryMB
+      Timeout: !Ref LambdaTimeoutSeconds
+      Environment:
+        Variables:
+          ENVIRONMENT: !Ref Environment
+          AWS_REGION: !Ref AWS::Region
+          DYNAMODB_TABLE_NAME: !Ref DynamoDBTableName
+          USE_S3_STORAGE: 'true'
+          LOCAL_FILE_STORAGE: 'false'
+          S3_BUCKET_NAME: !Ref FileStorageBucket
+          S3_INVOICES_BUCKET: !Ref FileStorageBucket
+          S3_ATTACHMENTS_BUCKET: !Ref FileStorageBucket
+          S3_PRESIGNED_URL_EXPIRATION: '3600'
+          JWT_SECRET: !Ref JWTSecret
+          COGNITO_USER_POOL_ID: !Ref CognitoUserPoolId
+          COGNITO_USER_POOL_ARN: !Ref CognitoUserPoolArn
+          COGNITO_CLIENT_ID: !Ref CognitoClientId
+          CORS_ORIGINS: !Sub https://${CloudFrontDistribution.DomainName}
+      Tags:
+        - Key: Project
+          Value: A3TV-WarrantyHub
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: ManagedBy
+          Value: CloudFormation
+        - Key: Purpose
+          Value: BackendApi
+
+  LambdaLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/a3tv-warranty-hub-${Environment}
+      RetentionInDays: 30
+      Tags:
+        Project: A3TV-WarrantyHub
+        Environment: !Ref Environment
+        ManagedBy: CloudFormation
+        Purpose: LambdaLogs
+
+  ApiGateway:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: !Sub a3tv-warranty-hub-api-${Environment}
+      Description: A3 Television Warranty & Complaint Hub REST API
+      EndpointConfiguration:
+        Types: [REGIONAL]
+      Tags:
+        - Key: Project
+          Value: A3TV-WarrantyHub
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: ManagedBy
+          Value: CloudFormation
+        - Key: Purpose
+          Value: BackendApi
+
+  CognitoAuthorizer:
+    Type: AWS::ApiGateway::Authorizer
+    Properties:
+      Name: !Sub a3tv-cognito-authorizer-${Environment}
+      Type: COGNITO_USER_POOLS
+      IdentitySource: method.request.header.Authorization
+      ProviderARNs:
+        - !Ref CognitoUserPoolArn
+      RestApiId: !Ref ApiGateway
+
+  ApiProxyResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref ApiGateway
+      ParentId: !GetAtt ApiGateway.RootResourceId
+      PathPart: '{proxy+}'
+
+  ApiProxyAnyMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref ApiGateway
+      ResourceId: !Ref ApiProxyResource
+      HttpMethod: ANY
+      AuthorizationType: COGNITO_USER_POOLS
+      AuthorizerId: !Ref CognitoAuthorizer
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BackendLambda.Arn}/invocations
+
+  ApiRootAnyMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref ApiGateway
+      ResourceId: !GetAtt ApiGateway.RootResourceId
+      HttpMethod: ANY
+      AuthorizationType: COGNITO_USER_POOLS
+      AuthorizerId: !Ref CognitoAuthorizer
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${BackendLambda.Arn}/invocations
+
+  ApiProxyOptionsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref ApiGateway
+      ResourceId: !Ref ApiProxyResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: MOCK
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+        IntegrationResponses:
+          - StatusCode: '200'
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key'"
+              method.response.header.Access-Control-Allow-Methods: "'DELETE,GET,HEAD,OPTIONS,PATCH,POST,PUT'"
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+            ResponseTemplates:
+              application/json: ''
+        PassthroughBehavior: WHEN_NO_MATCH
+      MethodResponses:
+        - StatusCode: '200'
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: false
+            method.response.header.Access-Control-Allow-Methods: false
+            method.response.header.Access-Control-Allow-Origin: false
+
+  ApiDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn:
+      - ApiProxyAnyMethod
+      - ApiRootAnyMethod
+      - ApiProxyOptionsMethod
+    Properties:
+      RestApiId: !Ref ApiGateway
+
+  ApiStage:
+    Type: AWS::ApiGateway::Stage
+    Properties:
+      RestApiId: !Ref ApiGateway
+      DeploymentId: !Ref ApiDeployment
+      StageName: prod
+      Tags:
+        - Key: Project
+          Value: A3TV-WarrantyHub
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: ManagedBy
+          Value: CloudFormation
+        - Key: Purpose
+          Value: BackendApiStage
+
+  LambdaApiGatewayPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt BackendLambda.Arn
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ApiGateway}/*/*
+
 Outputs:
+  ApiGatewayUrl:
+    Description: API Gateway URL for the deployed REST API
+    Value: !Sub https://${ApiGateway}.execute-api.${AWS::Region}.amazonaws.com/prod
 
-#   ApiGatewayUrl:
-#     Description: >
-#       API Gateway URL — paste this as VITE_API_BASE_URL in
-#       warranty-complaint-hub/.env.production before running npm run build
-#     Value: !Sub 'https://${ApiGateway}.execute-api.${AWS::Region}.amazonaws.com/prod'
-#     Export:
-#       Name: !Sub '${AWS::StackName}-ApiUrl'
-# 
-#   FrontendUrl:
-#     Description: CloudFront URL — open this in the browser to use the app
-#     Value: !Sub 'https://${CloudFrontDistribution.DomainName}'
-#     Export:
-#       Name: !Sub '${AWS::StackName}-FrontendUrl'
-# 
-#   FrontendBucketName:
-#     Description: Upload dist/ contents here after npm run build
-#     Value: !Ref FrontendBucket
-#     Export:
-#       Name: !Sub '${AWS::StackName}-FrontendBucket'
-# 
-#   CloudFrontDistributionId:
-#     Description: CloudFront Distribution ID (for cache invalidation)
-#     Value: !Ref CloudFrontDistribution
-#     Export:
-#       Name: !Sub '${AWS::StackName}-CFDistId'
-# 
+  FrontendUrl:
+    Description: CloudFront URL for the frontend
+    Value: !Sub https://${CloudFrontDistribution.DomainName}
+
+  FrontendBucketName:
+    Description: S3 bucket for frontend assets
+    Value: !Ref FrontendBucket
+
+  CloudFrontDistributionId:
+    Description: CloudFront distribution ID for cache invalidation
+    Value: !Ref CloudFrontDistribution
+
+  CognitoUserPoolId:
+    Description: Cognito User Pool ID
+    Value: !Ref CognitoUserPoolId
+
+  CognitoClientId:
+    Description: Cognito web app client ID
+    Value: !Ref CognitoClientId
+
   FileStorageBucketName:
     Description: S3 bucket for invoices and attachments
     Value: !Ref FileStorageBucket
-    Export:
-      Name: !Sub '${AWS::StackName}-StorageBucket'
 
   DynamoDBTableName:
     Description: DynamoDB table name
     Value: !Ref WarrantyComplaintTable
-
-#   LambdaFunctionName:
-#     Description: Lambda function name
-#     Value: !Ref BackendLambda
-# 
-#   LambdaRoleArn:
-#     Description: Lambda IAM execution role ARN
-#     Value: !GetAtt LambdaExecutionRole.Arn

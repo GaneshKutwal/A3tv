@@ -45,6 +45,10 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: str = "HS256"
     JWT_EXPIRATION_HOURS: int = 24
 
+    # ============ COGNITO CONFIGURATION ============
+    COGNITO_USER_POOL_ID: Optional[str] = os.getenv("COGNITO_USER_POOL_ID", None)
+    COGNITO_CLIENT_ID: Optional[str] = os.getenv("COGNITO_CLIENT_ID", None)
+
     # ============ CORS CONFIGURATION ============
     # Reads CORS_ORIGINS env variable as a JSON array or comma-separated string.
     # Default: allow all localhost ports for local development.

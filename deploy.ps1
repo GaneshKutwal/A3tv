@@ -8,15 +8,15 @@
       3. Deploy / update CloudFormation stack
       4. Read API Gateway URL from stack outputs
       5. Build React frontend with the correct API URL
-      6. Upload frontend dist/ to S3
+    6. Build frontend client assets for the configured hosting target
       7. Invalidate CloudFront cache
 .PREREQUISITES
     - AWS CLI installed and configured (aws configure)
     - Python 3.11 installed
     - Node.js / npm installed
-    - pip installed
+    - Docker Desktop running
 .USAGE
-    .\deploy.ps1 -StackName "a3tv-warranty-hub" -AwsRegion "us-east-1" -JWTSecret "your-strong-secret-here"
+    .\deploy.ps1 -StackName "a3tv-warranty-hub" -JWTSecret "your-strong-secret-here"
 #>
 
 param(
@@ -24,7 +24,7 @@ param(
     [string]$StackName = "a3tv-warranty-hub",
 
     [Parameter(Mandatory=$false)]
-    [string]$AwsRegion = "us-east-1",
+    [string]$AwsRegion = "ap-south-1",
 
     [Parameter(Mandatory=$true)]
     [string]$JWTSecret,
@@ -33,7 +33,16 @@ param(
     [string]$Environment = "production",
 
     [Parameter(Mandatory=$false)]
-    [string]$DynamoDBTableName = "WarrantyComplaintHub"
+    [string]$DynamoDBTableName = "WarrantyComplaintHub",
+
+    [Parameter(Mandatory=$false)]
+    [string]$CognitoClientId = "1aj6of5phb0cu3v4m4p57t1qep",
+
+    [Parameter(Mandatory=$false)]
+    [string]$CognitoUserPoolId = "ap-south-1_MFC0x3rMG",
+
+    [Parameter(Mandatory=$false)]
+    [string]$CognitoUserPoolArn = "arn:aws:cognito-idp:ap-south-1:704984106908:userpool/ap-south-1_MFC0x3rMG"
 )
 
 # ── Colour helpers ────────────────────────────────────────────────────────────
@@ -48,7 +57,7 @@ $ErrorActionPreference = "Stop"
 $ProjectRoot  = $PSScriptRoot
 $BackendDir   = Join-Path $ProjectRoot "backend"
 $FrontendDir  = Join-Path $ProjectRoot "warranty-complaint-hub"
-$BuildDir     = Join-Path $FrontendDir "dist"
+$BuildDir     = Join-Path $FrontendDir "dist\client"
 $PackageDir   = Join-Path $ProjectRoot ".lambda_package"
 $ZipFile      = Join-Path $ProjectRoot "lambda.zip"
 $CfnTemplate  = Join-Path $ProjectRoot "cloudformation.yaml"
@@ -86,7 +95,7 @@ if ($LASTEXITCODE -ne 0) {
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# STEP 2 - Package Lambda (pip install + zip)
+# STEP 2 - Package Lambda (Linux dependencies via Docker + zip)
 # ════════════════════════════════════════════════════════════════════════════
 Write-Step "Step 2/7 - Packaging Lambda function"
 
@@ -95,9 +104,23 @@ if (Test-Path $PackageDir) { Remove-Item -Recurse -Force $PackageDir }
 if (Test-Path $ZipFile)    { Remove-Item -Force $ZipFile }
 New-Item -ItemType Directory -Path $PackageDir | Out-Null
 
-Write-Info "Installing Python dependencies into .lambda_package/ ..."
-pip install -r "$BackendDir\requirements.txt" -t $PackageDir --quiet
-if ($LASTEXITCODE -ne 0) { Write-Fail "pip install failed" }
+Write-Info "Checking Docker ..."
+if (!(Get-Command docker -ErrorAction SilentlyContinue)) {
+    Write-Fail "Docker CLI not found. Install Docker Desktop and try again."
+}
+docker info *> $null
+if ($LASTEXITCODE -ne 0) {
+    Write-Fail "Docker is not running. Start Docker Desktop and try again."
+}
+
+$LambdaBuildImage = "public.ecr.aws/sam/build-python3.11:latest"
+Write-Info "Installing Linux-compatible Python dependencies with Docker ..."
+docker run --rm --platform linux/amd64 `
+    -v "${PackageDir}:/asset-output" `
+    -v "${BackendDir}:/var/task:ro" `
+    $LambdaBuildImage `
+    bash -lc "pip install --no-cache-dir -r /var/task/requirements.txt -t /asset-output"
+if ($LASTEXITCODE -ne 0) { Write-Fail "Docker dependency installation failed" }
 
 Write-Info "Copying backend source files ..."
 # Copy all Python source files (exclude local dev files)
@@ -149,7 +172,10 @@ aws cloudformation $Action `
         ParameterKey=LambdaCodeBucket,ParameterValue=$StagingBucket `
         ParameterKey=LambdaCodeKey,ParameterValue=$LambdaS3Key `
         ParameterKey=JWTSecret,ParameterValue=$JWTSecret `
-        ParameterKey=DynamoDBTableName,ParameterValue=$DynamoDBTableName
+        ParameterKey=DynamoDBTableName,ParameterValue=$DynamoDBTableName `
+        ParameterKey=CognitoClientId,ParameterValue=$CognitoClientId `
+        ParameterKey=CognitoUserPoolId,ParameterValue=$CognitoUserPoolId `
+        ParameterKey=CognitoUserPoolArn,ParameterValue=$CognitoUserPoolArn
 
 if ($LASTEXITCODE -ne 0) { Write-Fail "CloudFormation $Action failed" }
 
@@ -194,7 +220,13 @@ Write-OK "Frontend S3 Bucket: $FrontendBucketName"
 Write-Step "Step 6/7 - Building React frontend"
 
 # Write production .env for Vite
-$EnvContent = "VITE_API_BASE_URL=$ApiGatewayUrl"
+$EnvContent = @"
+VITE_API_BASE_URL=$ApiGatewayUrl
+VITE_AUTH_MODE=cognito
+VITE_COGNITO_REGION=$AwsRegion
+VITE_COGNITO_USER_POOL_ID=$CognitoUserPoolId
+VITE_COGNITO_CLIENT_ID=$CognitoClientId
+"@
 Set-Content -Path "$FrontendDir\.env.production" -Value $EnvContent
 Write-Info "Wrote .env.production: $EnvContent"
 
@@ -206,6 +238,12 @@ if ($LASTEXITCODE -ne 0) { Write-Fail "npm install failed" }
 Write-Info "Running npm run build ..."
 npm run build
 if ($LASTEXITCODE -ne 0) { Write-Fail "npm run build failed" }
+if (!(Test-Path $BuildDir)) {
+    Write-Fail "Frontend build output not found at $BuildDir"
+}
+if (!(Test-Path (Join-Path $BuildDir "index.html"))) {
+    Write-Fail "TanStack Start produced an SSR build without index.html. S3 static hosting requires a static SPA build or an SSR-capable frontend host."
+}
 Write-OK "Frontend built in $BuildDir"
 
 # Upload dist/ to frontend S3 bucket
@@ -249,9 +287,7 @@ Write-Host "  App URL (CloudFront):  $FrontendUrl" -ForegroundColor Yellow
 Write-Host "  API URL (API Gateway): $ApiGatewayUrl" -ForegroundColor Yellow
 Write-Host "  API Docs:              $ApiGatewayUrl/docs" -ForegroundColor Yellow
 Write-Host ""
-Write-Host "  Login credentials:" -ForegroundColor Cyan
-Write-Host "    employee1@a3tv.com / password123" -ForegroundColor White
-Write-Host "    employee2@a3tv.com / password456" -ForegroundColor White
+Write-Host "  Login: use a verified Cognito user" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "  NOTE: CloudFront takes 5-10 minutes to propagate globally." -ForegroundColor Gray
 Write-Host "  If the frontend looks blank, wait and hard-refresh (Ctrl+Shift+R)." -ForegroundColor Gray
