@@ -152,9 +152,6 @@ function LoginPage() {
             <Button type="submit" className="w-full glow-primary" disabled={loading}>
               {loading ? "Signing in..." : "Sign in"}
             </Button>
-            <p className="text-center text-xs text-muted-foreground">
-              Demo access — use predefined credentials (e.g. employee1 / password123)
-            </p>
           </form>
         </motion.div>
       </div>
