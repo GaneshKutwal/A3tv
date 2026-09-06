@@ -139,8 +139,6 @@ function mapWarranty(raw: any): Warranty {
 
 function mapComplaint(raw: any): Complaint {
   const userIdentity = (value: string | undefined): string => {
-    if (value === "user-001") return "employee1@a3tv.com";
-    if (value === "user-002") return "employee2@a3tv.com";
     return value ?? "Service Desk";
   };
 
@@ -217,6 +215,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const identity = loginData.user?.email ?? username;
       const displayName = loginData.user?.name ?? identity;
       localStorage.setItem("authToken", token);
+      if (loginData.refreshToken) {
+        localStorage.setItem("refreshToken", loginData.refreshToken);
+      }
       localStorage.setItem("currentUser", identity);
       setUser(identity);
       toast.success(`Welcome, ${displayName}`);
@@ -237,6 +238,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       console.error("Logout error:", error);
     } finally {
       localStorage.removeItem("authToken");
+      localStorage.removeItem("refreshToken");
       localStorage.removeItem("currentUser");
       setUser(null);
       setLoading(false);

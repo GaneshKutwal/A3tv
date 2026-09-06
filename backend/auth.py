@@ -1,20 +1,13 @@
-"""Authentication utilities for local JWT and Cognito access tokens."""
+"""Local development auth and production API Gateway claims."""
 from datetime import datetime, timedelta
-import json
-from threading import Lock
-from urllib.request import urlopen
+from typing import Any, Dict, Optional
+
+from fastapi import HTTPException, Request, status
 from jose import jwt
-from typing import Optional, Dict
 from config import settings
-import logging
 
-logger = logging.getLogger(__name__)
 
-_cognito_keys: Optional[Dict] = None
-_cognito_keys_lock = Lock()
-
-# Predefined users for local development
-PREDEFINED_USERS = {
+LOCAL_USERS = {
     "employee1@a3tv.com": {
         "userId": "user-001",
         "name": "Employee One",
@@ -29,95 +22,66 @@ PREDEFINED_USERS = {
     },
 }
 
-def validate_credentials(username: str, password: str) -> Optional[Dict]:
-    """Validate user credentials against predefined users"""
-    user = PREDEFINED_USERS.get(username)
-    if user and user["password"] == password:
-        return user
-    return None
 
-def create_access_token(user_id: str, email: str, expires_delta: Optional[timedelta] = None) -> str:
-    """Create JWT access token"""
-    if expires_delta:
-        expire = datetime.utcnow() + expires_delta
-    else:
-        expire = datetime.utcnow() + timedelta(hours=settings.JWT_EXPIRATION_HOURS)
-    
-    to_encode = {
-        "sub": user_id,
-        "email": email,
-        "exp": expire,
-        "iat": datetime.utcnow(),
-    }
-    
-    encoded_jwt = jwt.encode(to_encode, settings.JWT_SECRET, algorithm=settings.JWT_ALGORITHM)
-    return encoded_jwt
+def validate_credentials(username: str, password: str) -> Optional[Dict[str, str]]:
+    if settings.ENVIRONMENT != "local":
+        return None
+    user = LOCAL_USERS.get(username)
+    return user if user and user["password"] == password else None
 
-def verify_token(token: str) -> Optional[Dict]:
-    """Verify a Cognito token in AWS or the local HS256 token during development."""
-    if settings.COGNITO_USER_POOL_ID:
-        cognito_claims = _verify_cognito_token(token)
-        if cognito_claims:
-            return cognito_claims
 
+def create_access_token(user_id: str, email: str) -> str:
+    return jwt.encode(
+        {
+            "sub": user_id,
+            "email": email,
+            "exp": datetime.utcnow() + timedelta(hours=settings.JWT_EXPIRATION_HOURS),
+            "iat": datetime.utcnow(),
+        },
+        settings.JWT_SECRET,
+        algorithm=settings.JWT_ALGORITHM,
+    )
+
+
+def _get_local_token(request: Request) -> Optional[str]:
+    authorization = request.headers.get("Authorization", "")
+    scheme, _, token = authorization.partition(" ")
+    return token if scheme.lower() == "bearer" and token else None
+
+
+def _verify_local_token(token: str) -> Optional[Dict[str, str]]:
     try:
         payload = jwt.decode(token, settings.JWT_SECRET, algorithms=[settings.JWT_ALGORITHM])
-        user_id: str = payload.get("sub")
-        email: str = payload.get("email")
-        if user_id is None:
+        if not payload.get("sub"):
             return None
-        return {"user_id": user_id, "email": email}
-    except jwt.ExpiredSignatureError:
-        logger.warning("Token expired")
-        return None
+        return {"user_id": payload["sub"], "email": payload.get("email", "")}
     except jwt.JWTError:
-        logger.warning("Invalid token")
         return None
 
-def _cognito_issuer() -> str:
-    return f"https://cognito-idp.{settings.AWS_REGION}.amazonaws.com/{settings.COGNITO_USER_POOL_ID}"
 
-def _get_cognito_keys() -> Dict:
-    global _cognito_keys
-    if _cognito_keys is None:
-        with _cognito_keys_lock:
-            if _cognito_keys is None:
-                with urlopen(f"{_cognito_issuer()}/.well-known/jwks.json", timeout=5) as response:
-                    _cognito_keys = json.load(response)
-    return _cognito_keys
+def get_current_user(request: Request) -> Dict[str, Any]:
+    """Use local JWTs only in local mode; production trusts API Gateway claims."""
+    if settings.ENVIRONMENT == "local":
+        token = _get_local_token(request)
+        claims = _verify_local_token(token) if token else None
+        if claims:
+            return claims
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
 
-def _verify_cognito_token(token: str) -> Optional[Dict]:
-    try:
-        header = jwt.get_unverified_header(token)
-        key = next(key for key in _get_cognito_keys()["keys"] if key["kid"] == header["kid"])
-        payload = jwt.decode(
-            token,
-            key,
-            algorithms=["RS256"],
-            issuer=_cognito_issuer(),
-            options={"verify_aud": False},
+    event = request.scope.get("aws.event", {})
+    request_context = event.get("requestContext", {})
+    authorizer = request_context.get("authorizer", {})
+    claims = authorizer.get("claims") or authorizer.get("jwt", {}).get("claims") or {}
+
+    user_id = claims.get("sub")
+    if not user_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Unauthorized",
         )
-        if payload.get("token_use") not in {"access", "id"}:
-            return None
-        if settings.COGNITO_CLIENT_ID:
-            token_client_id = payload.get("client_id") or payload.get("aud")
-            if token_client_id != settings.COGNITO_CLIENT_ID:
-                return None
-        return {
-            "user_id": payload.get("sub"),
-            "email": payload.get("email") or payload.get("username"),
-        }
-    except (StopIteration, KeyError, ValueError, OSError, jwt.JWTError) as error:
-        logger.warning("Cognito token validation failed: %s", error)
-        return None
 
-def get_token_from_header(auth_header: str) -> Optional[str]:
-    """Extract JWT token from Authorization header"""
-    if not auth_header:
-        return None
-    
-    parts = auth_header.split()
-    if len(parts) != 2 or parts[0].lower() != "bearer":
-        return None
-    
-    return parts[1]
+    return {
+        "user_id": user_id,
+        "email": claims.get("email") or claims.get("cognito:username") or "",
+        "username": claims.get("cognito:username") or claims.get("username") or "",
+    }

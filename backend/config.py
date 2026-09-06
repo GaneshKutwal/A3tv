@@ -40,14 +40,14 @@ class Settings(BaseSettings):
     S3_ATTACHMENTS_BUCKET: str = os.getenv("S3_ATTACHMENTS_BUCKET", os.getenv("S3_BUCKET_NAME", "a3tv-storage"))
     S3_PRESIGNED_URL_EXPIRATION: int = int(os.getenv("S3_PRESIGNED_URL_EXPIRATION", "3600"))
 
-    # ============ JWT TOKEN CONFIGURATION ============
-    JWT_SECRET: str = os.getenv("JWT_SECRET", "your-secret-key-change-in-production")
-    JWT_ALGORITHM: str = "HS256"
-    JWT_EXPIRATION_HOURS: int = 24
-
     # ============ COGNITO CONFIGURATION ============
     COGNITO_USER_POOL_ID: Optional[str] = os.getenv("COGNITO_USER_POOL_ID", None)
     COGNITO_CLIENT_ID: Optional[str] = os.getenv("COGNITO_CLIENT_ID", None)
+
+    # Local-only compatibility auth; production uses API Gateway Cognito claims.
+    JWT_SECRET: str = os.getenv("JWT_SECRET", "local-development-secret-change-me")
+    JWT_ALGORITHM: str = "HS256"
+    JWT_EXPIRATION_HOURS: int = 24
 
     # ============ CORS CONFIGURATION ============
     # Reads CORS_ORIGINS env variable as a JSON array or comma-separated string.

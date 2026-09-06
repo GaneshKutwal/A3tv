@@ -85,12 +85,17 @@ export const login = async (username: string, password: string) => {
   }
 
   const result = response.data.AuthenticationResult;
+  const idTokenClaims = JSON.parse(atob(result.IdToken.split('.')[1]));
   return {
     data: {
-      data: {
-        accessToken: result.AccessToken,
-        expiresIn: result.ExpiresIn,
-        user: { email: username },
+      accessToken: result.IdToken,
+      cognitoAccessToken: result.AccessToken,
+      idToken: result.IdToken,
+      refreshToken: result.RefreshToken,
+      expiresIn: result.ExpiresIn,
+      user: {
+        email: idTokenClaims.email ?? username,
+        name: idTokenClaims.name ?? idTokenClaims.email ?? username,
       },
     },
   };

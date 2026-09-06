@@ -1,46 +1,22 @@
 """Analytics and dashboard routes"""
-from fastapi import APIRouter, HTTPException, status, Header, Query
+from fastapi import APIRouter, Request
 from datetime import datetime
 from typing import Optional
 
 from models.response import ApiResponse
-from auth import verify_token, get_token_from_header
+from auth import get_current_user
 from database import get_dashboard_stats
 
 router = APIRouter()
 
-def get_current_user(authorization: Optional[str] = Header(None)):
-    """Dependency to get current authenticated user"""
-    if not authorization:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Missing authorization header"
-        )
-    
-    token = get_token_from_header(authorization)
-    if not token:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid authorization header"
-        )
-    
-    claims = verify_token(token)
-    if not claims:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or expired token"
-        )
-    
-    return claims
-
 @router.get("/dashboard/stats", response_model=ApiResponse)
 async def get_dashboard_statistics(
-    authorization: Optional[str] = Header(None),
+    request: Request,
 ):
     """Get dashboard summary statistics"""
     
     # Verify authentication
-    claims = get_current_user(authorization)
+    claims = get_current_user(request)
     user_id = claims["user_id"]
     
     # Get statistics

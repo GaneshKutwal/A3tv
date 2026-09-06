@@ -125,8 +125,8 @@ async def not_found_handler(request, exc):
     )
 
 # ── AWS Lambda handler (used by mangum when running on Lambda) ──────────────
-# lifespan="off" because Lambda reuses the container; startup ran already.
-handler = Mangum(app, lifespan="off")
+# Run startup initialization so DynamoDB and S3 are ready in each Lambda container.
+handler = Mangum(app, lifespan="auto")
 
 if __name__ == "__main__":
     import uvicorn

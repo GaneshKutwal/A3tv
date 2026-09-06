@@ -17,25 +17,10 @@ Parameters:
     Default: backend/lambda.zip
     Description: S3 object key for the Lambda deployment package
 
-  JWTSecret:
+  CognitoUserPoolName:
     Type: String
-    NoEcho: true
-    MinLength: 32
-    Description: Secret used only for local/custom JWT compatibility
-
-  CognitoUserPoolId:
-    Type: String
-    Default: ap-south-1_MFC0x3rMG
-    Description: Existing Cognito User Pool ID
-
-  CognitoUserPoolArn:
-    Type: String
-    Default: arn:aws:cognito-idp:ap-south-1:704984106908:userpool/ap-south-1_MFC0x3rMG
-    Description: Existing Cognito User Pool ARN
-
-  CognitoClientId:
-    Type: String
-    Description: Cognito web app client ID without a client secret
+    Default: A3TV-Employees
+    Description: Cognito User Pool name for authorized employees
 
   DynamoDBTableName:
     Type: String
@@ -135,6 +120,41 @@ Resources:
           Value: CloudFormation
         - Key: Purpose
           Value: InvoicesAndAttachments
+
+  CognitoUserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: !Sub ${CognitoUserPoolName}-${Environment}
+      UsernameAttributes:
+        - email
+      AutoVerifiedAttributes:
+        - email
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 12
+          RequireNumbers: true
+          RequireSymbols: true
+          RequireUppercase: true
+          RequireLowercase: true
+      AccountRecoverySetting:
+        RecoveryMechanisms:
+          - Name: verified_email
+            Priority: 1
+      UserPoolTags:
+        Project: A3TV-WarrantyHub
+        Environment: !Ref Environment
+
+  CognitoAppClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      UserPoolId: !Ref CognitoUserPool
+      ClientName: !Sub a3tv-web-${Environment}
+      GenerateSecret: false
+      ExplicitAuthFlows:
+        - ALLOW_USER_PASSWORD_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+        - ALLOW_USER_SRP_AUTH
+      PreventUserExistenceErrors: ENABLED
 
   FrontendBucket:
     Type: AWS::S3::Bucket
@@ -289,7 +309,6 @@ Resources:
       Environment:
         Variables:
           ENVIRONMENT: !Ref Environment
-          AWS_REGION: !Ref AWS::Region
           DYNAMODB_TABLE_NAME: !Ref DynamoDBTableName
           USE_S3_STORAGE: 'true'
           LOCAL_FILE_STORAGE: 'false'
@@ -297,11 +316,9 @@ Resources:
           S3_INVOICES_BUCKET: !Ref FileStorageBucket
           S3_ATTACHMENTS_BUCKET: !Ref FileStorageBucket
           S3_PRESIGNED_URL_EXPIRATION: '3600'
-          JWT_SECRET: !Ref JWTSecret
-          COGNITO_USER_POOL_ID: !Ref CognitoUserPoolId
-          COGNITO_USER_POOL_ARN: !Ref CognitoUserPoolArn
-          COGNITO_CLIENT_ID: !Ref CognitoClientId
-          CORS_ORIGINS: !Sub https://${CloudFrontDistribution.DomainName}
+          COGNITO_USER_POOL_ID: !Ref CognitoUserPool
+          COGNITO_CLIENT_ID: !Ref CognitoAppClient
+          CORS_ORIGINS: !Sub '["https://${CloudFrontDistribution.DomainName}"]'
       Tags:
         - Key: Project
           Value: A3TV-WarrantyHub
@@ -347,7 +364,7 @@ Resources:
       Type: COGNITO_USER_POOLS
       IdentitySource: method.request.header.Authorization
       ProviderARNs:
-        - !Ref CognitoUserPoolArn
+        - !GetAtt CognitoUserPool.Arn
       RestApiId: !Ref ApiGateway
 
   ApiProxyResource:
@@ -462,11 +479,11 @@ Outputs:
 
   CognitoUserPoolId:
     Description: Cognito User Pool ID
-    Value: !Ref CognitoUserPoolId
+    Value: !Ref CognitoUserPool
 
   CognitoClientId:
     Description: Cognito web app client ID
-    Value: !Ref CognitoClientId
+    Value: !Ref CognitoAppClient
 
   FileStorageBucketName:
     Description: S3 bucket for invoices and attachments

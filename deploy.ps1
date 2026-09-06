@@ -16,18 +16,15 @@
     - Node.js / npm installed
     - Docker Desktop running
 .USAGE
-    .\deploy.ps1 -StackName "a3tv-warranty-hub" -JWTSecret "your-strong-secret-here"
+    .\deploy.ps1 -StackName "A3TV-WarrantyHub" -CognitoUserEmail "employee@a3tv.com" -CognitoTemporaryPassword "..."
 #>
 
 param(
     [Parameter(Mandatory=$false)]
-    [string]$StackName = "a3tv-warranty-hub",
+    [string]$StackName = "A3TV-WarrantyHub",
 
     [Parameter(Mandatory=$false)]
     [string]$AwsRegion = "ap-south-1",
-
-    [Parameter(Mandatory=$true)]
-    [string]$JWTSecret,
 
     [Parameter(Mandatory=$false)]
     [string]$Environment = "production",
@@ -36,13 +33,10 @@ param(
     [string]$DynamoDBTableName = "WarrantyComplaintHub",
 
     [Parameter(Mandatory=$false)]
-    [string]$CognitoClientId = "1aj6of5phb0cu3v4m4p57t1qep",
+    [string]$CognitoUserEmail,
 
     [Parameter(Mandatory=$false)]
-    [string]$CognitoUserPoolId = "ap-south-1_MFC0x3rMG",
-
-    [Parameter(Mandatory=$false)]
-    [string]$CognitoUserPoolArn = "arn:aws:cognito-idp:ap-south-1:704984106908:userpool/ap-south-1_MFC0x3rMG"
+    [string]$CognitoTemporaryPassword
 )
 
 # ── Colour helpers ────────────────────────────────────────────────────────────
@@ -52,6 +46,10 @@ function Write-Fail  { param($msg) Write-Host "    ERR $msg" -ForegroundColor Re
 function Write-Info  { param($msg) Write-Host "    ... $msg" -ForegroundColor Gray }
 
 $ErrorActionPreference = "Stop"
+
+if ($CognitoTemporaryPassword -and $CognitoTemporaryPassword -notmatch '[A-Z]') {
+    Write-Fail "CognitoTemporaryPassword must include an uppercase letter, lowercase letter, number, and symbol."
+}
 
 # ── Paths ────────────────────────────────────────────────────────────────────
 $ProjectRoot  = $PSScriptRoot
@@ -66,7 +64,8 @@ $CfnTemplate  = Join-Path $ProjectRoot "cloudformation.yaml"
 $AwsAccountId = (aws sts get-caller-identity --query Account --output text 2>$null)
 if (!$AwsAccountId) { Write-Fail "AWS CLI not configured. Run 'aws configure' first." }
 $StagingBucket = "a3tv-deploy-$AwsAccountId"
-$LambdaS3Key   = "backend/lambda.zip"
+$LambdaVersion = [DateTime]::UtcNow.ToString("yyyyMMddHHmmss")
+$LambdaS3Key   = "backend/lambda-$LambdaVersion.zip"
 
 Write-Host "`n==========================================" -ForegroundColor Magenta
 Write-Host "  A3TV Warranty Hub - AWS Deployment" -ForegroundColor Magenta
@@ -80,8 +79,11 @@ Write-Host "==========================================" -ForegroundColor Magenta
 # STEP 1 - Create staging S3 bucket (if it doesn't exist)
 # ════════════════════════════════════════════════════════════════════════════
 Write-Step "Step 1/7 - Ensuring staging S3 bucket exists: $StagingBucket"
-$BucketExists = aws s3api head-bucket --bucket $StagingBucket 2>&1
-if ($LASTEXITCODE -ne 0) {
+$ErrorActionPreference = "Continue"
+$BucketExists = aws s3api head-bucket --bucket $StagingBucket 2>$null
+$BucketExitCode = $LASTEXITCODE
+$ErrorActionPreference = "Stop"
+if ($BucketExitCode -ne 0) {
     if ($AwsRegion -eq "us-east-1") {
         aws s3api create-bucket --bucket $StagingBucket --region $AwsRegion | Out-Null
     } else {
@@ -157,8 +159,11 @@ Write-OK "Uploaded lambda.zip"
 # ════════════════════════════════════════════════════════════════════════════
 Write-Step "Step 4/7 - Deploying CloudFormation stack: $StackName"
 
-$StackExists = aws cloudformation describe-stacks --stack-name $StackName --region $AwsRegion 2>&1
-$Action = if ($LASTEXITCODE -eq 0) { "update-stack" } else { "create-stack" }
+$ErrorActionPreference = "Continue"
+$StackExists = aws cloudformation describe-stacks --stack-name $StackName --region $AwsRegion 2>$null
+$StackExitCode = $LASTEXITCODE
+$ErrorActionPreference = "Stop"
+$Action = if ($StackExitCode -eq 0) { "update-stack" } else { "create-stack" }
 
 Write-Info "Action: $Action"
 
@@ -171,11 +176,7 @@ aws cloudformation $Action `
         ParameterKey=Environment,ParameterValue=$Environment `
         ParameterKey=LambdaCodeBucket,ParameterValue=$StagingBucket `
         ParameterKey=LambdaCodeKey,ParameterValue=$LambdaS3Key `
-        ParameterKey=JWTSecret,ParameterValue=$JWTSecret `
-        ParameterKey=DynamoDBTableName,ParameterValue=$DynamoDBTableName `
-        ParameterKey=CognitoClientId,ParameterValue=$CognitoClientId `
-        ParameterKey=CognitoUserPoolId,ParameterValue=$CognitoUserPoolId `
-        ParameterKey=CognitoUserPoolArn,ParameterValue=$CognitoUserPoolArn
+        ParameterKey=DynamoDBTableName,ParameterValue=$DynamoDBTableName
 
 if ($LASTEXITCODE -ne 0) { Write-Fail "CloudFormation $Action failed" }
 
@@ -208,10 +209,32 @@ $ApiGatewayUrl       = Get-StackOutput "ApiGatewayUrl"
 $FrontendUrl         = Get-StackOutput "FrontendUrl"
 $FrontendBucketName  = Get-StackOutput "FrontendBucketName"
 $CloudFrontDistId    = Get-StackOutput "CloudFrontDistributionId"
+$CognitoUserPoolId   = Get-StackOutput "CognitoUserPoolId"
+$CognitoClientId     = Get-StackOutput "CognitoClientId"
 
 Write-OK "API Gateway URL:   $ApiGatewayUrl"
 Write-OK "Frontend URL:      $FrontendUrl"
 Write-OK "Frontend S3 Bucket: $FrontendBucketName"
+Write-OK "Cognito User Pool:  $CognitoUserPoolId"
+Write-OK "Cognito App Client: $CognitoClientId"
+
+if ($CognitoUserEmail -and $CognitoTemporaryPassword) {
+    Write-Step "Creating or resetting Cognito employee: $CognitoUserEmail"
+    $ErrorActionPreference = "Continue"
+    $PoolUser = aws cognito-idp admin-get-user --user-pool-id $CognitoUserPoolId --username $CognitoUserEmail --region $AwsRegion 2>$null
+    $PoolUserExitCode = $LASTEXITCODE
+    $ErrorActionPreference = "Stop"
+    if ($PoolUserExitCode -eq 0) {
+        aws cognito-idp admin-set-user-password --user-pool-id $CognitoUserPoolId --username $CognitoUserEmail --password $CognitoTemporaryPassword --permanent --region $AwsRegion
+    } else {
+        aws cognito-idp admin-create-user --user-pool-id $CognitoUserPoolId --username $CognitoUserEmail --user-attributes Name=email,Value=$CognitoUserEmail Name=email_verified,Value=true --temporary-password $CognitoTemporaryPassword --message-action SUPPRESS --region $AwsRegion
+        if ($LASTEXITCODE -eq 0) {
+            aws cognito-idp admin-set-user-password --user-pool-id $CognitoUserPoolId --username $CognitoUserEmail --password $CognitoTemporaryPassword --permanent --region $AwsRegion
+        }
+    }
+    if ($LASTEXITCODE -ne 0) { Write-Fail "Cognito employee setup failed" }
+    Write-OK "Cognito employee is ready"
+}
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -235,9 +258,10 @@ Set-Location $FrontendDir
 npm install --silent
 if ($LASTEXITCODE -ne 0) { Write-Fail "npm install failed" }
 
-Write-Info "Running npm run build ..."
-npm run build
-if ($LASTEXITCODE -ne 0) { Write-Fail "npm run build failed" }
+Write-Info "Running Vite build ..."
+$ViteCli = Join-Path $FrontendDir "node_modules\vite\bin\vite.js"
+node $ViteCli build
+if ($LASTEXITCODE -ne 0) { Write-Fail "Vite build failed" }
 if (!(Test-Path $BuildDir)) {
     Write-Fail "Frontend build output not found at $BuildDir"
 }

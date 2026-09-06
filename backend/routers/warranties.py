@@ -1,45 +1,21 @@
 """Warranties routes"""
-from fastapi import APIRouter, HTTPException, status, Header, UploadFile, File, Form, Query
+from fastapi import APIRouter, HTTPException, status, Request, UploadFile, File, Form, Query
 from datetime import datetime, timedelta
 from typing import Optional, List, Union
 import uuid
 import os
 
 from models.response import ApiResponse, WarrantyResponse
-from auth import verify_token, get_token_from_header
+from auth import get_current_user
 from database import create_warranty, get_warranties, get_warranty, update_warranty as db_update_warranty
 from storage import save_invoice
 from config import settings
 
 router = APIRouter()
 
-def get_current_user(authorization: Optional[str] = Header(None)):
-    """Dependency to get current authenticated user"""
-    if not authorization:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Missing authorization header"
-        )
-    
-    token = get_token_from_header(authorization)
-    if not token:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid authorization header"
-        )
-    
-    claims = verify_token(token)
-    if not claims:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or expired token"
-        )
-    
-    return claims
-
 @router.post("/warranties", response_model=ApiResponse)
 async def create_warranty_endpoint(
-    user=Header(None, alias="Authorization"),
+    request: Request,
     serialNumber: str = Form(...),
     productName: str = Form(...),
     productCategory: str = Form(...),
@@ -56,7 +32,7 @@ async def create_warranty_endpoint(
     """Register a new warranty with invoice upload"""
     
     # Verify authentication
-    claims = get_current_user(user)
+    claims = get_current_user(request)
     user_id = claims["user_id"]
     
     # Check for duplicate serial number
@@ -136,7 +112,7 @@ async def create_warranty_endpoint(
 
 @router.get("/warranties", response_model=ApiResponse)
 async def list_warranties(
-    authorization: Optional[str] = Header(None),
+    request: Request,
     serialNumber: Optional[str] = Query(None),
     status: Optional[str] = Query(None),
     startDate: Optional[str] = Query(None),
@@ -148,7 +124,7 @@ async def list_warranties(
     """List warranties with optional filters"""
     
     # Verify authentication
-    claims = get_current_user(authorization)
+    claims = get_current_user(request)
     user_id = claims["user_id"]
     
     # Build filters
@@ -200,12 +176,12 @@ async def list_warranties(
 @router.get("/warranties/{serial_number}", response_model=ApiResponse)
 async def get_warranty_detail(
     serial_number: str,
-    authorization: Optional[str] = Header(None),
+    request: Request,
 ):
     """Get warranty details"""
     
     # Verify authentication
-    claims = get_current_user(authorization)
+    claims = get_current_user(request)
     
     # Get warranty
     warranty = await get_warranty(serial_number)

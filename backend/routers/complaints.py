@@ -1,11 +1,11 @@
 """Complaints routes"""
-from fastapi import APIRouter, HTTPException, status, Header, UploadFile, File, Form, Query
+from fastapi import APIRouter, HTTPException, status, Request, UploadFile, File, Form, Query
 from datetime import datetime
 from typing import Optional, List
 import os
 
 from models.response import ApiResponse, ComplaintResponse
-from auth import verify_token, get_token_from_header
+from auth import get_current_user
 from database import (
     create_complaint,
     generate_complaint_id,
@@ -18,33 +18,9 @@ from config import settings
 
 router = APIRouter()
 
-def get_current_user(authorization: Optional[str] = Header(None)):
-    """Dependency to get current authenticated user"""
-    if not authorization:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Missing authorization header"
-        )
-    
-    token = get_token_from_header(authorization)
-    if not token:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid authorization header"
-        )
-    
-    claims = verify_token(token)
-    if not claims:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or expired token"
-        )
-    
-    return claims
-
 @router.post("/complaints", response_model=ApiResponse)
 async def create_complaint_endpoint(
-    authorization: Optional[str] = Header(None),
+    request: Request,
     warrantyId: str = Form(...),
     serialNumber: str = Form(...),
     description: str = Form(...),
@@ -56,7 +32,7 @@ async def create_complaint_endpoint(
     """File a new complaint with attachments"""
     
     # Verify authentication
-    claims = get_current_user(authorization)
+    claims = get_current_user(request)
     user_id = claims["user_id"]
     
     # Handle file uploads via storage module (local or S3 depending on environment)
@@ -115,7 +91,7 @@ async def create_complaint_endpoint(
 
 @router.get("/complaints", response_model=ApiResponse)
 async def list_complaints(
-    authorization: Optional[str] = Header(None),
+    request: Request,
     status: Optional[str] = Query(None),
     serialNumber: Optional[str] = Query(None),
     startDate: Optional[str] = Query(None),
@@ -127,7 +103,7 @@ async def list_complaints(
     """List complaints with optional filters"""
     
     # Verify authentication
-    claims = get_current_user(authorization)
+    claims = get_current_user(request)
     user_id = claims["user_id"]
     
     # Build filters
@@ -177,12 +153,12 @@ async def list_complaints(
 @router.get("/complaints/{complaint_id}", response_model=ApiResponse)
 async def get_complaint_detail(
     complaint_id: str,
-    authorization: Optional[str] = Header(None),
+    request: Request,
 ):
     """Get complaint details"""
     
     # Verify authentication
-    claims = get_current_user(authorization)
+    claims = get_current_user(request)
     user_id = claims["user_id"]
     
     # Get complaint
@@ -219,7 +195,7 @@ async def get_complaint_detail(
 @router.put("/complaints/{complaint_id}", response_model=ApiResponse)
 async def update_complaint_endpoint(
     complaint_id: str,
-    authorization: Optional[str] = Header(None),
+    request: Request,
     description: Optional[str] = Form(None),
     priority: Optional[str] = Form(None),
     assignedTo: Optional[str] = Form(None),
@@ -232,7 +208,7 @@ async def update_complaint_endpoint(
     """Update complaint with optional attachments"""
     
     # Verify authentication
-    claims = get_current_user(authorization)
+    claims = get_current_user(request)
     user_id = claims["user_id"]
     
     # Get existing complaint
@@ -320,7 +296,7 @@ async def update_complaint_endpoint(
 @router.put("/complaints/{complaint_id}/resolve", response_model=ApiResponse)
 async def resolve_complaint_endpoint(
     complaint_id: str,
-    authorization: Optional[str] = Header(None),
+    request: Request,
     status_update: Optional[str] = Form("RESOLVED"),
     resolutionNotes: Optional[str] = Form(None),
     noteBy: Optional[str] = Form(None),
@@ -328,7 +304,7 @@ async def resolve_complaint_endpoint(
     """Mark complaint as resolved"""
     
     # Verify authentication
-    claims = get_current_user(authorization)
+    claims = get_current_user(request)
     user_id = claims["user_id"]
     
     # Get existing complaint
