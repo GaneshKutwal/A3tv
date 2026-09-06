@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useMemo, useState, useEffect } from "react";
 import { format } from "date-fns";
-import { Search, CalendarIcon, X } from "lucide-react";
+import { Search, CalendarIcon, FileSpreadsheet, X } from "lucide-react";
 import type { DateRange } from "react-day-picker";
 
 import { Input } from "@/components/ui/input";
@@ -26,6 +26,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useData, warrantyEndDate, warrantyIsActive, type Warranty } from "@/lib/data";
+import { downloadCsv } from "@/lib/csv-export";
 
 export const Route = createFileRoute("/_app/warranty/")({
   head: () => ({
@@ -71,6 +72,25 @@ function WarrantyListPage() {
       return true;
     });
   }, [warranties, serialQuery, productQuery, range]);
+
+  const exportWarranties = () => {
+    downloadCsv(
+      `warranties-${format(new Date(), "yyyy-MM-dd")}.csv`,
+      ["Serial No", "Model", "Customer", "Phone", "Email", "Purchase Date", "Warranty Ends", "Dealer", "Dealer Location", "Status"],
+      filtered.map((w) => [
+        w.serialNo,
+        w.model,
+        w.customerName,
+        w.phone,
+        w.email,
+        format(new Date(w.purchaseDate), "yyyy-MM-dd"),
+        format(warrantyEndDate(w), "yyyy-MM-dd"),
+        w.dealerName,
+        w.dealerLocation,
+        warrantyIsActive(w) ? "Active" : "Expired",
+      ]),
+    );
+  };
 
   return (
     <div className="flex h-full flex-col gap-4 overflow-hidden p-4 lg:p-6">
@@ -122,6 +142,9 @@ function WarrantyListPage() {
             <X className="h-3 w-3" /> Clear
           </Button>
         )}
+        <Button variant="outline" size="sm" className="gap-2" onClick={exportWarranties} disabled={!filtered.length}>
+          <FileSpreadsheet className="h-4 w-4" /> Export CSV
+        </Button>
         <p className="ml-auto text-sm text-muted-foreground">
           {filtered.length} of {warranties.length} warranties
         </p>

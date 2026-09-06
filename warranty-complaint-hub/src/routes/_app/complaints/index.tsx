@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useMemo, useState, useEffect } from "react";
 import { format } from "date-fns";
-import { Search, CheckCircle2, Pencil } from "lucide-react";
+import { Search, CalendarIcon, CheckCircle2, FileSpreadsheet, Pencil, X } from "lucide-react";
 import { toast } from "sonner";
 
 import { Input } from "@/components/ui/input";
@@ -42,6 +42,10 @@ import {
   type ComplaintStatus,
 } from "@/lib/data";
 import { PriorityBadge, StatusBadge } from "@/components/status-badge";
+import { Calendar } from "@/components/ui/calendar";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import type { DateRange } from "react-day-picker";
+import { downloadCsv } from "@/lib/csv-export";
 
 export const Route = createFileRoute("/_app/complaints/")({
   head: () => ({
@@ -62,6 +66,7 @@ function ComplaintsPage() {
   const { user } = useAuth();
   const [tab, setTab] = useState<string>("All");
   const [query, setQuery] = useState("");
+  const [range, setRange] = useState<DateRange | undefined>();
   const [editing, setEditing] = useState<Complaint | null>(null);
   const [resolving, setResolving] = useState<Complaint | null>(null);
 
@@ -84,9 +89,38 @@ function ComplaintsPage() {
         const w = `${c.serialNo} ${c.id} ${c.issueType} ${c.loggedBy} ${c.assignedTo ?? ""}`.toLowerCase();
         if (!w.includes(q)) return false;
       }
+      if (range?.from) {
+        const created = new Date(c.createdAt);
+        if (created < range.from) return false;
+        if (range.to) {
+          const end = new Date(range.to);
+          end.setHours(23, 59, 59, 999);
+          if (created > end) return false;
+        }
+      }
       return true;
     });
-  }, [complaints, tab, query]);
+  }, [complaints, tab, query, range]);
+
+  const exportComplaints = () => {
+    downloadCsv(
+      `complaints-${format(new Date(), "yyyy-MM-dd")}.csv`,
+      ["Complaint ID", "Serial No", "Issue", "Description", "Priority", "Logged By", "Assigned To", "Created", "Status", "Resolved At", "Resolution Note"],
+      filtered.map((c) => [
+        c.id,
+        c.serialNo,
+        c.issueType,
+        c.description,
+        c.priority,
+        c.loggedBy,
+        c.assignedTo ?? "",
+        format(new Date(c.createdAt), "yyyy-MM-dd"),
+        c.status,
+        c.resolvedAt ? format(new Date(c.resolvedAt), "yyyy-MM-dd") : "",
+        c.resolutionNote ?? "",
+      ]),
+    );
+  };
 
   const openEdit = (c: Complaint) => {
     setEditing(c);
@@ -168,6 +202,29 @@ function ComplaintsPage() {
             className="w-64 pl-9"
           />
         </div>
+        <Popover>
+          <PopoverTrigger asChild>
+            <Button variant="outline" size="sm" className="gap-2 font-normal">
+              <CalendarIcon className="h-4 w-4" />
+              {range?.from
+                ? range.to
+                  ? `${format(range.from, "dd MMM yy")} – ${format(range.to, "dd MMM yy")}`
+                  : format(range.from, "dd MMM yyyy")
+                : "Created date range"}
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent className="w-auto p-0" align="end">
+            <Calendar mode="range" selected={range} onSelect={setRange} numberOfMonths={2} />
+          </PopoverContent>
+        </Popover>
+        {(query || range?.from) && (
+          <Button variant="ghost" size="sm" className="gap-1" onClick={() => { setQuery(""); setRange(undefined); }}>
+            <X className="h-3 w-3" /> Clear
+          </Button>
+        )}
+        <Button variant="outline" size="sm" className="gap-2" onClick={exportComplaints} disabled={!filtered.length}>
+          <FileSpreadsheet className="h-4 w-4" /> Export CSV
+        </Button>
       </div>
 
       <div className="min-h-0 flex-1 rounded-lg border border-border">
