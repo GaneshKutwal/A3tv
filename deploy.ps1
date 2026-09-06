@@ -57,7 +57,7 @@ $ErrorActionPreference = "Stop"
 $ProjectRoot  = $PSScriptRoot
 $BackendDir   = Join-Path $ProjectRoot "backend"
 $FrontendDir  = Join-Path $ProjectRoot "warranty-complaint-hub"
-$BuildDir     = Join-Path $FrontendDir "dist\client"
+$BuildDir     = Join-Path $FrontendDir "dist"
 $PackageDir   = Join-Path $ProjectRoot ".lambda_package"
 $ZipFile      = Join-Path $ProjectRoot "lambda.zip"
 $CfnTemplate  = Join-Path $ProjectRoot "cloudformation.yaml"
@@ -242,11 +242,11 @@ if (!(Test-Path $BuildDir)) {
     Write-Fail "Frontend build output not found at $BuildDir"
 }
 if (!(Test-Path (Join-Path $BuildDir "index.html"))) {
-    Write-Fail "TanStack Start produced an SSR build without index.html. S3 static hosting requires a static SPA build or an SSR-capable frontend host."
+    Write-Fail "Frontend build did not produce dist\index.html"
 }
 Write-OK "Frontend built in $BuildDir"
 
-# Upload dist/ to frontend S3 bucket
+# Upload static frontend files to the frontend S3 bucket
 Write-Info "Uploading dist/ to s3://$FrontendBucketName ..."
 aws s3 sync $BuildDir "s3://$FrontendBucketName" `
     --delete `
