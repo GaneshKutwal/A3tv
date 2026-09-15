@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from mangum import Mangum
 
-from routers import auth, warranties, complaints, analytics
+from routers import auth, warranties, complaints
 from database import init_dynamodb
 from storage import init_s3, get_storage_info
 from models.response import ApiResponse
@@ -66,7 +66,6 @@ app.add_middleware(
 app.include_router(auth.router, prefix="/api/v1", tags=["auth"])
 app.include_router(warranties.router, prefix="/api/v1", tags=["warranties"])
 app.include_router(complaints.router, prefix="/api/v1", tags=["complaints"])
-app.include_router(analytics.router, prefix="/api/v1", tags=["analytics"])
 
 # Root endpoint
 @app.get("/")
