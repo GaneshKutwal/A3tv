@@ -51,6 +51,8 @@ function NewWarrantyPage() {
   const [model, setModel] = useState("");
   const [serialNo, setSerialNo] = useState("");
   const [purchaseDate, setPurchaseDate] = useState<Date | undefined>();
+  const [purchaseDateText, setPurchaseDateText] = useState<string>("");
+  const [calendarOpen, setCalendarOpen] = useState(false);
   const [durationMonths, setDurationMonths] = useState<string>("24");
   const [dealerName, setDealerName] = useState("");
   const [dealerLocation, setDealerLocation] = useState("");
@@ -61,17 +63,40 @@ function NewWarrantyPage() {
     setInvoiceFiles(Array.from(files));
   };
 
+  /** Handle manual text input — native date input gives YYYY-MM-DD */
+  const handleDateTextChange = (value: string) => {
+    setPurchaseDateText(value);
+    if (value) {
+      const parsed = new Date(value);
+      if (!isNaN(parsed.getTime())) {
+        setPurchaseDate(parsed);
+      } else {
+        setPurchaseDate(undefined);
+      }
+    } else {
+      setPurchaseDate(undefined);
+    }
+  };
+
+  /** Handle calendar picker selection */
+  const handleCalendarSelect = (date: Date | undefined) => {
+    setPurchaseDate(date);
+    if (date) {
+      // Sync back to the native date input as YYYY-MM-DD
+      setPurchaseDateText(format(date, "yyyy-MM-dd"));
+    } else {
+      setPurchaseDateText("");
+    }
+    setCalendarOpen(false);
+  };
+
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!customerName.trim() || !phone.trim() || !serialNo.trim() || !purchaseDate || !dealerName.trim()) {
       toast.error("Fill in all required fields (*)");
       return;
     }
-    if (invoiceFiles.length === 0) {
-      toast.error("Please upload an invoice / purchase receipt");
-      return;
-    }
-
     // Build FormData matching backend field names exactly
     const formData = new FormData();
     formData.append("serialNumber", serialNo.trim());
@@ -152,18 +177,39 @@ function NewWarrantyPage() {
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
-                  <Label>Purchase date *</Label>
-                  <Popover>
-                    <PopoverTrigger asChild>
-                      <Button variant="outline" className="w-full justify-start gap-2 font-normal">
-                        <CalendarIcon className="h-4 w-4" />
-                        {purchaseDate ? format(purchaseDate, "dd MMM yyyy") : "Pick date"}
-                      </Button>
-                    </PopoverTrigger>
-                    <PopoverContent className="w-auto p-0" align="start">
-                      <Calendar mode="single" selected={purchaseDate} onSelect={setPurchaseDate} />
-                    </PopoverContent>
-                  </Popover>
+                  <Label htmlFor="purchaseDateInput">Purchase date *</Label>
+                  {/* Dual input: native date field for manual typing + calendar icon for picker */}
+                  <div className="flex gap-2">
+                    <Input
+                      id="purchaseDateInput"
+                      type="date"
+                      value={purchaseDateText}
+                      onChange={(e) => handleDateTextChange(e.target.value)}
+                      className="flex-1"
+                      max={format(new Date(), "yyyy-MM-dd")}
+                    />
+                    <Popover open={calendarOpen} onOpenChange={setCalendarOpen}>
+                      <PopoverTrigger asChild>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="icon"
+                          className="shrink-0"
+                          title="Pick from calendar"
+                        >
+                          <CalendarIcon className="h-4 w-4" />
+                        </Button>
+                      </PopoverTrigger>
+                      <PopoverContent className="w-auto p-0" align="end">
+                        <Calendar
+                          mode="single"
+                          selected={purchaseDate}
+                          onSelect={handleCalendarSelect}
+                          disabled={(date) => date > new Date()}
+                        />
+                      </PopoverContent>
+                    </Popover>
+                  </div>
                 </div>
                 <div className="space-y-2">
                   <Label>Warranty duration</Label>
@@ -182,7 +228,7 @@ function NewWarrantyPage() {
                 </div>
               </div>
               <div className="space-y-2">
-                <Label>Invoice / purchase receipt *</Label>
+                <Label>Invoice / purchase receipt (optional)</Label>
                 <input
                   ref={fileRef}
                   type="file"

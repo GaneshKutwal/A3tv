@@ -2,7 +2,7 @@
 import boto3
 import logging
 from typing import Dict, List, Optional, Any
-from datetime import datetime
+from datetime import datetime, timedelta
 from boto3.dynamodb.conditions import Key
 from config import settings
 
@@ -131,14 +131,57 @@ async def update_warranty(serial_number: str, update_data: Dict) -> Dict:
         update_expression_parts = []
         expression_values = {}
         
+        if 'productName' in update_data:
+            update_expression_parts.append('ProductName = :pname')
+            expression_values[':pname'] = update_data['productName']
+
+        if 'customerName' in update_data:
+            update_expression_parts.append('CustomerName = :cname')
+            expression_values[':cname'] = update_data['customerName']
+
+        if 'phone' in update_data:
+            update_expression_parts.append('Phone = :phone')
+            expression_values[':phone'] = update_data['phone']
+
+        if 'email' in update_data:
+            update_expression_parts.append('Email = :email')
+            expression_values[':email'] = update_data['email']
+
+        if 'address' in update_data:
+            update_expression_parts.append('Address = :address')
+            expression_values[':address'] = update_data['address']
+
+        if 'dealerName' in update_data:
+            update_expression_parts.append('DealerName = :dname')
+            expression_values[':dname'] = update_data['dealerName']
+
+        if 'dealerLocation' in update_data:
+            update_expression_parts.append('DealerLocation = :dloc')
+            expression_values[':dloc'] = update_data['dealerLocation']
+
+        if 'purchaseDate' in update_data:
+            update_expression_parts.append('PurchaseDate = :pdate')
+            expression_values[':pdate'] = update_data['purchaseDate']
+
         if 'warrantyMonths' in update_data:
             update_expression_parts.append('WarrantyMonths = :months')
             expression_values[':months'] = update_data['warrantyMonths']
-        
+
+        pdate = update_data.get('purchaseDate') or warranty.get('PurchaseDate')
+        wmonths = update_data.get('warrantyMonths') or warranty.get('WarrantyMonths', 24)
+        if pdate and ('purchaseDate' in update_data or 'warrantyMonths' in update_data):
+            try:
+                parsed_pdate = datetime.fromisoformat(str(pdate)[:10])
+                calculated_end = parsed_pdate + timedelta(days=int(wmonths) * 30)
+                update_expression_parts.append('WarrantyEndDate = :end_date')
+                expression_values[':end_date'] = calculated_end.date().isoformat()
+            except Exception:
+                pass
+
         if 'notes' in update_data:
             update_expression_parts.append('Notes = :notes')
             expression_values[':notes'] = update_data['notes']
-        
+
         update_expression_parts.append('UpdatedAt = :updated')
         expression_values[':updated'] = datetime.utcnow().isoformat()
         
@@ -159,18 +202,32 @@ async def update_warranty(serial_number: str, update_data: Dict) -> Dict:
         raise
 
 async def create_complaint(complaint_data: Dict[str, Any]) -> Dict[str, Any]:
-    """Create complaint item in DynamoDB"""
+    """Create complaint item in DynamoDB.
+
+    serialNumber is optional. When absent the complaint is registered against
+    the customer name so the serial can be linked later.
+    """
     tbl = get_table()
     try:
+        serial_number = complaint_data.get('serialNumber') or ''
+        complaint_id = complaint_data['complaintId']
+
+        # Use SERIAL# PK when serial is known, otherwise key by customer name
+        if serial_number:
+            pk = f"SERIAL#{serial_number}"
+        else:
+            customer_key = (complaint_data.get('customerName') or 'UNKNOWN').replace(' ', '_').upper()
+            pk = f"CUSTOMER#{customer_key}#{complaint_id}"
+
         item = {
-            'PK': f"SERIAL#{complaint_data['serialNumber']}",
-            'SK': f"COMPLAINT#{datetime.utcnow().isoformat()}#{complaint_data['complaintId']}",
-            'EntityId': complaint_data['complaintId'],
+            'PK': pk,
+            'SK': f"COMPLAINT#{datetime.utcnow().isoformat()}#{complaint_id}",
+            'EntityId': complaint_id,
             'EntityType': 'COMPLAINT',
             'UserId': complaint_data['userId'],
             'LoggedBy': complaint_data.get('loggedBy', 'Service Desk'),
-            'WarrantyId': complaint_data['warrantyId'],
-            'SerialNumber': complaint_data['serialNumber'],
+            'WarrantyId': complaint_data.get('warrantyId', ''),
+            'SerialNumber': serial_number,
             'Description': complaint_data['description'],
             'Priority': complaint_data.get('priority', 'MEDIUM'),
             'Status': 'OPEN',
@@ -179,6 +236,14 @@ async def create_complaint(complaint_data: Dict[str, Any]) -> Dict[str, Any]:
             'AttachmentPaths': complaint_data.get('attachmentPaths', []),
             'Notes': complaint_data.get('notes', []),
         }
+
+        # Store customer details when provided directly (name-based complaint)
+        if complaint_data.get('customerName'):
+            item['CustomerName'] = complaint_data['customerName']
+        if complaint_data.get('phone'):
+            item['Phone'] = complaint_data['phone']
+        if complaint_data.get('alternatePhone'):
+            item['AlternatePhone'] = complaint_data['alternatePhone']
         if complaint_data.get('assignedTo'):
             item['AssignedTo'] = complaint_data['assignedTo']
             item['Notes'].append({
@@ -188,7 +253,7 @@ async def create_complaint(complaint_data: Dict[str, Any]) -> Dict[str, Any]:
             })
         
         tbl.put_item(Item=item)
-        logger.info(f"Created complaint: {complaint_data['complaintId']}")
+        logger.info(f"Created complaint: {complaint_id}")
         return item
     except Exception as e:
         logger.error(f"Error creating complaint: {str(e)}")
@@ -221,8 +286,12 @@ async def get_complaints(user_id: str, filters: Optional[Dict] = None) -> List[D
         if filters:
             if filters.get('serialNumber'):
                 items = [item for item in items if filters['serialNumber'].lower() in item.get('SerialNumber', '').lower()]
+            if filters.get('customerName'):
+                items = [item for item in items if filters['customerName'].lower() in item.get('CustomerName', '').lower()]
             if filters.get('status'):
                 items = [item for item in items if item.get('Status') == filters['status']]
+            if filters.get('priority'):
+                items = [item for item in items if item.get('Priority', '').upper() == filters['priority'].upper()]
         
         return items
     except Exception as e:
@@ -241,12 +310,29 @@ async def get_complaint(user_id: str, complaint_id: str) -> Optional[Dict]:
         raise
 
 async def update_complaint(user_id: str, complaint_id: str, update_data: Dict) -> Dict:
-    """Update complaint item"""
+    """Update complaint item.
+    
+    When a serial number is added to a name-based complaint (created without serial),
+    the complaint is migrated from CUSTOMER# partition to SERIAL# partition for consistency.
+    """
     tbl = get_table()
     try:
         complaint = await get_complaint(user_id, complaint_id)
         if not complaint:
             raise ValueError("Complaint not found")
+        
+        # Check if we're adding a serial number to a customer-keyed complaint
+        old_pk = complaint.get('PK', '')
+        old_sk = complaint.get('SK', '')
+        new_serial_number = update_data.get('serialNumber', '').strip() if 'serialNumber' in update_data else None
+        current_serial = complaint.get('SerialNumber', '')
+        
+        # If moving from CUSTOMER partition to SERIAL partition
+        needs_migration = (
+            old_pk.startswith('CUSTOMER#') and 
+            new_serial_number and 
+            new_serial_number != current_serial
+        )
         
         # Update item
         update_expression_parts = []
@@ -261,6 +347,23 @@ async def update_complaint(user_id: str, complaint_id: str, update_data: Dict) -
         if 'priority' in update_data:
             update_expression_parts.append('Priority = :priority')
             expression_values[':priority'] = update_data['priority']
+
+        # Allow linking a serial number to a name-based complaint
+        if 'serialNumber' in update_data and update_data['serialNumber']:
+            update_expression_parts.append('SerialNumber = :serial')
+            expression_values[':serial'] = update_data['serialNumber']
+
+        if 'customerName' in update_data:
+            update_expression_parts.append('CustomerName = :cname')
+            expression_values[':cname'] = update_data['customerName']
+
+        if 'phone' in update_data:
+            update_expression_parts.append('Phone = :phone')
+            expression_values[':phone'] = update_data['phone']
+
+        if 'alternatePhone' in update_data:
+            update_expression_parts.append('AlternatePhone = :alt_phone')
+            expression_values[':alt_phone'] = update_data['alternatePhone']
 
         if 'assignedTo' in update_data:
             update_expression_parts.append('AssignedTo = :assigned_to')
@@ -308,22 +411,59 @@ async def update_complaint(user_id: str, complaint_id: str, update_data: Dict) -
         update_expression_parts.append('UpdatedAt = :updated')
         expression_values[':updated'] = datetime.utcnow().isoformat()
         
-        update_parameters = dict(
-            Key={
-                'PK': complaint['PK'],
-                'SK': complaint['SK'],
-            },
-            UpdateExpression=f"SET {', '.join(update_expression_parts)}",
-            ExpressionAttributeValues=expression_values,
-            ReturnValues='ALL_NEW'
-        )
-        if expression_names:
-            update_parameters['ExpressionAttributeNames'] = expression_names
+        # If migration is needed, handle the partition key change
+        if needs_migration:
+            # First, update the old item in place
+            update_parameters = dict(
+                Key={
+                    'PK': old_pk,
+                    'SK': old_sk,
+                },
+                UpdateExpression=f"SET {', '.join(update_expression_parts)}",
+                ExpressionAttributeValues=expression_values,
+                ReturnValues='ALL_NEW'
+            )
+            if expression_names:
+                update_parameters['ExpressionAttributeNames'] = expression_names
+            
+            response = tbl.update_item(**update_parameters)
+            updated_item = response.get('Attributes', {})
+            
+            # Create new item with correct SERIAL# partition key
+            new_pk = f"SERIAL#{new_serial_number}"
+            new_sk = f"COMPLAINT#{datetime.utcnow().isoformat()}#{complaint_id}"
+            
+            new_item = updated_item.copy()
+            new_item['PK'] = new_pk
+            new_item['SK'] = new_sk
+            
+            # Put the new item
+            tbl.put_item(Item=new_item)
+            logger.info(f"Migrated complaint {complaint_id} from {old_pk} to {new_pk}")
+            
+            # Delete the old item
+            tbl.delete_item(Key={'PK': old_pk, 'SK': old_sk})
+            logger.info(f"Deleted old complaint item at {old_pk}")
+            
+            return new_item
+        else:
+            # Standard update without migration
+            update_parameters = dict(
+                Key={
+                    'PK': complaint['PK'],
+                    'SK': complaint['SK'],
+                },
+                UpdateExpression=f"SET {', '.join(update_expression_parts)}",
+                ExpressionAttributeValues=expression_values,
+                ReturnValues='ALL_NEW'
+            )
+            if expression_names:
+                update_parameters['ExpressionAttributeNames'] = expression_names
 
-        response = tbl.update_item(**update_parameters)
-        
-        logger.info(f"Updated complaint: {complaint_id}")
-        return response.get('Attributes', {})
+            response = tbl.update_item(**update_parameters)
+            
+            logger.info(f"Updated complaint: {complaint_id}")
+            return response.get('Attributes', {})
     except Exception as e:
         logger.error(f"Error updating complaint: {str(e)}")
         raise

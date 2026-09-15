@@ -21,19 +21,30 @@ router = APIRouter()
 @router.post("/complaints", response_model=ApiResponse)
 async def create_complaint_endpoint(
     request: Request,
-    warrantyId: str = Form(...),
-    serialNumber: str = Form(...),
+    warrantyId: Optional[str] = Form(None),
+    serialNumber: Optional[str] = Form(None),
+    customerName: Optional[str] = Form(None),
+    phone: Optional[str] = Form(None),
     description: str = Form(...),
     priority: str = Form("MEDIUM"),
     assignedTo: Optional[str] = Form(None),
     loggedBy: Optional[str] = Form(None),
+    alternatePhone: Optional[str] = Form(None),
     attachments: Optional[List[UploadFile]] = File(None),
 ):
-    """File a new complaint with attachments"""
+    """File a new complaint. Either serialNumber or customerName must be provided."""
     
     # Verify authentication
     claims = get_current_user(request)
     user_id = claims["user_id"]
+
+    # Validate: need at least serial number or customer name
+    if not serialNumber and not customerName:
+        from fastapi import HTTPException
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Either serialNumber or customerName must be provided",
+        )
     
     # Handle file uploads via storage module (local or S3 depending on environment)
     attachment_paths = []
@@ -59,12 +70,15 @@ async def create_complaint_endpoint(
     complaint_data = {
         "userId": user_id,
         "complaintId": complaint_id,
-        "warrantyId": warrantyId,
-        "serialNumber": serialNumber,
+        "warrantyId": warrantyId or "",
+        "serialNumber": serialNumber or "",
+        "customerName": customerName or "",
+        "phone": phone or "",
         "description": description,
         "priority": priority,
         "assignedTo": assignedTo,
         "loggedBy": loggedBy or "Service Desk",
+        "alternatePhone": alternatePhone,
         "attachmentPaths": attachment_paths,
     }
     
@@ -76,11 +90,14 @@ async def create_complaint_endpoint(
             "complaintId": complaint["EntityId"],
             "warrantyId": complaint["WarrantyId"],
             "serialNumber": complaint["SerialNumber"],
+            "customerName": complaint.get("CustomerName", ""),
+            "phone": complaint.get("Phone", ""),
             "description": complaint["Description"],
             "loggedBy": complaint.get("LoggedBy", complaint.get("UserId", "Service Desk")),
             "priority": complaint["Priority"],
             "status": complaint["Status"],
             "assignedTo": complaint.get("AssignedTo"),
+            "alternatePhone": complaint.get("AlternatePhone"),
             "notes": complaint.get("Notes", []),
             "attachmentCount": len(attachment_paths),
             "createdAt": complaint["CreatedAt"],
@@ -128,12 +145,15 @@ async def list_complaints(
                 {
                     "complaintId": c["EntityId"],
                     "warrantyId": c["WarrantyId"],
-                    "serialNumber": c["SerialNumber"],
+                    "serialNumber": c.get("SerialNumber", ""),
+                    "customerName": c.get("CustomerName", ""),
+                    "phone": c.get("Phone", ""),
                     "description": c["Description"],
                     "loggedBy": c.get("LoggedBy", c.get("UserId", "Service Desk")),
                     "priority": c["Priority"],
                     "status": c["Status"],
                     "assignedTo": c.get("AssignedTo"),
+                    "alternatePhone": c.get("AlternatePhone"),
                     "notes": c.get("Notes", []),
                     "resolutionNotes": c.get("ResolutionNotes"),
                     "resolvedAt": c.get("ResolvedAt"),
@@ -175,12 +195,15 @@ async def get_complaint_detail(
         data={
             "complaintId": complaint["EntityId"],
             "warrantyId": complaint["WarrantyId"],
-            "serialNumber": complaint["SerialNumber"],
+            "serialNumber": complaint.get("SerialNumber", ""),
+            "customerName": complaint.get("CustomerName", ""),
+            "phone": complaint.get("Phone", ""),
             "description": complaint["Description"],
             "loggedBy": complaint.get("LoggedBy", complaint.get("UserId", "Service Desk")),
             "priority": complaint["Priority"],
             "status": complaint["Status"],
             "assignedTo": complaint.get("AssignedTo"),
+            "alternatePhone": complaint.get("AlternatePhone"),
             "notes": complaint.get("Notes", []),
             "attachmentCount": len(complaint.get("AttachmentPaths", [])),
             "resolutionNotes": complaint.get("ResolutionNotes"),
@@ -199,13 +222,17 @@ async def update_complaint_endpoint(
     description: Optional[str] = Form(None),
     priority: Optional[str] = Form(None),
     assignedTo: Optional[str] = Form(None),
+    alternatePhone: Optional[str] = Form(None),
+    serialNumber: Optional[str] = Form(None),
+    customerName: Optional[str] = Form(None),
+    phone: Optional[str] = Form(None),
     note: Optional[str] = Form(None),
     noteBy: Optional[str] = Form(None),
     complaint_status: Optional[str] = Form(None, alias="status"),
     resolutionNotes: Optional[str] = Form(None),
     attachments: Optional[List[UploadFile]] = File(None),
 ):
-    """Update complaint with optional attachments"""
+    """Update complaint with optional attachments. Also used to link a serial number to a name-based complaint."""
     
     # Verify authentication
     claims = get_current_user(request)
@@ -251,9 +278,17 @@ async def update_complaint_endpoint(
         update_data["description"] = description
     if priority:
         update_data["priority"] = priority
+    if serialNumber and serialNumber.strip():
+        update_data["serialNumber"] = serialNumber.strip()
+    if customerName is not None:
+        update_data["customerName"] = customerName
+    if phone is not None:
+        update_data["phone"] = phone
     if assignedTo is not None:
         update_data["assignedTo"] = assignedTo or None
         update_data["noteBy"] = noteBy or "Service Desk"
+    if alternatePhone is not None:
+        update_data["alternatePhone"] = alternatePhone or None
     if complaint_status:
         update_data["status"] = complaint_status.strip().upper().replace(" ", "_")
     if resolutionNotes:
@@ -280,12 +315,15 @@ async def update_complaint_endpoint(
         data={
             "complaintId": updated_complaint["EntityId"],
             "warrantyId": updated_complaint["WarrantyId"],
-            "serialNumber": updated_complaint["SerialNumber"],
+            "serialNumber": updated_complaint.get("SerialNumber", ""),
+            "customerName": updated_complaint.get("CustomerName", ""),
+            "phone": updated_complaint.get("Phone", ""),
             "description": updated_complaint["Description"],
             "loggedBy": updated_complaint.get("LoggedBy", updated_complaint.get("UserId", "Service Desk")),
             "priority": updated_complaint["Priority"],
             "status": updated_complaint["Status"],
             "assignedTo": updated_complaint.get("AssignedTo"),
+            "alternatePhone": updated_complaint.get("AlternatePhone"),
             "notes": updated_complaint.get("Notes", []),
             "updatedAt": updated_complaint["UpdatedAt"],
         },

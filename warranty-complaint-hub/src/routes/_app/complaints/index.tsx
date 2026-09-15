@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useMemo, useState, useEffect } from "react";
 import { format } from "date-fns";
-import { Search, CalendarIcon, CheckCircle2, FileSpreadsheet, Pencil, X } from "lucide-react";
+import { Search, CalendarIcon, CheckCircle2, FileSpreadsheet, Pencil, X, ChevronsUpDown, Check } from "lucide-react";
 import { toast } from "sonner";
 
 import { Input } from "@/components/ui/input";
@@ -25,6 +25,15 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
 import {
   Table,
   TableBody,
@@ -35,6 +44,7 @@ import {
 } from "@/components/ui/table";
 import {
   ENGINEERS,
+  ISSUE_TYPES,
   useAuth,
   useData,
   type Complaint,
@@ -43,7 +53,6 @@ import {
 } from "@/lib/data";
 import { PriorityBadge, StatusBadge } from "@/components/status-badge";
 import { Calendar } from "@/components/ui/calendar";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import type { DateRange } from "react-day-picker";
 import { downloadCsv } from "@/lib/csv-export";
 
@@ -62,7 +71,7 @@ export const Route = createFileRoute("/_app/complaints/")({
 const STATUS_TABS = ["All", "Open", "In Progress", "Resolved"] as const;
 
 function ComplaintsPage() {
-  const { complaints, updateComplaint, resolveComplaint, fetchComplaints } = useData();
+  const { warranties, complaints, updateComplaint, resolveComplaint, fetchComplaints } = useData();
   const { user } = useAuth();
   const [tab, setTab] = useState<string>("All");
   const [query, setQuery] = useState("");
@@ -78,6 +87,11 @@ function ComplaintsPage() {
   const [editStatus, setEditStatus] = useState<ComplaintStatus>("Open");
   const [editPriority, setEditPriority] = useState<ComplaintPriority>("Low");
   const [editAssignee, setEditAssignee] = useState<string>("");
+  const [editAltPhone, setEditAltPhone] = useState<string>("");
+  const [editIssueType, setEditIssueType] = useState<string>("");
+  const [editDescription, setEditDescription] = useState<string>("");
+  const [editSerialNumber, setEditSerialNumber] = useState<string>("");
+  const [editSerialOpen, setEditSerialOpen] = useState(false);
   const [editNote, setEditNote] = useState("");
   const [resolutionNote, setResolutionNote] = useState("");
 
@@ -86,7 +100,7 @@ function ComplaintsPage() {
       if (tab !== "All" && c.status !== tab) return false;
       if (query) {
         const q = query.toLowerCase();
-        const w = `${c.serialNo} ${c.id} ${c.issueType} ${c.loggedBy} ${c.assignedTo ?? ""}`.toLowerCase();
+        const w = `${c.serialNo} ${c.id} ${c.alternatePhone ?? ""} ${c.issueType} ${c.loggedBy} ${c.assignedTo ?? ""} ${c.customerName ?? ""} ${c.phone ?? ""}`.toLowerCase();
         if (!w.includes(q)) return false;
       }
       if (range?.from) {
@@ -105,10 +119,11 @@ function ComplaintsPage() {
   const exportComplaints = () => {
     downloadCsv(
       `complaints-${format(new Date(), "yyyy-MM-dd")}.csv`,
-      ["Complaint ID", "Serial No", "Issue", "Description", "Priority", "Logged By", "Assigned To", "Created", "Status", "Resolved At", "Resolution Note"],
+      ["Complaint ID", "Serial No", "Alt Phone", "Issue", "Description", "Priority", "Logged By", "Assigned To", "Created", "Status", "Resolved At", "Resolution Note"],
       filtered.map((c) => [
         c.id,
         c.serialNo,
+        c.alternatePhone ?? "",
         c.issueType,
         c.description,
         c.priority,
@@ -127,6 +142,10 @@ function ComplaintsPage() {
     setEditStatus(c.status);
     setEditPriority(c.priority);
     setEditAssignee(c.assignedTo ?? "");
+    setEditAltPhone(c.alternatePhone ?? "");
+    setEditIssueType(c.issueType || "Other");
+    setEditDescription(c.description || "");
+    setEditSerialNumber(""); // blank — user fills in to link
     setEditNote("");
   };
 
@@ -138,12 +157,16 @@ function ComplaintsPage() {
       return;
     }
     try {
+      const fullDescription = `${editIssueType || "Other"}\n${editDescription.trim()}`;
       await updateComplaint(
         editing.id,
         {
           status: editStatus,
           priority: editPriority,
           assignedTo: editAssignee || null,
+          alternatePhone: editAltPhone.trim() || undefined,
+          description: fullDescription,
+          serialNumber: editSerialNumber.trim() || undefined,
         },
         editNote,
         user ?? "Service Desk",
@@ -247,7 +270,19 @@ function ComplaintsPage() {
               {filtered.map((c) => (
                 <TableRow key={c.id}>
                   <TableCell className="font-medium">{c.id}</TableCell>
-                  <TableCell>{c.serialNo}</TableCell>
+                  <TableCell>
+                    {c.serialNo ? (
+                      <div>{c.serialNo}</div>
+                    ) : (
+                      <div>
+                        <div className="font-medium">{c.customerName || "—"}</div>
+                        {c.phone && <div className="text-xs text-muted-foreground">{c.phone}</div>}
+                        <div className="mt-0.5 inline-flex items-center rounded-sm border border-amber-500/40 bg-amber-500/10 px-1 text-[10px] text-amber-600 dark:text-amber-400">
+                          Serial pending
+                        </div>
+                      </div>
+                    )}
+                  </TableCell>
                   <TableCell>{c.issueType}</TableCell>
                   <TableCell><PriorityBadge priority={c.priority} /></TableCell>
                   <TableCell className="text-muted-foreground">{c.loggedBy}</TableCell>
@@ -300,19 +335,22 @@ function ComplaintsPage() {
           <DialogHeader>
             <DialogTitle>Update {editing?.id}</DialogTitle>
             <DialogDescription>
-              {editing?.serialNo} · {editing?.issueType}
+              {editing?.serialNo
+                ? `${editing.serialNo} · ${editing.issueType}`
+                : `${editing?.customerName || "Customer"} · ${editing?.issueType}`
+              }
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
-                <Label>Status</Label>
-                <Select value={editStatus} onValueChange={(v) => setEditStatus(v as ComplaintStatus)}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
+                <Label>Issue type</Label>
+                <Select value={editIssueType} onValueChange={setEditIssueType}>
+                  <SelectTrigger><SelectValue placeholder="Select issue" /></SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="Open">Open</SelectItem>
-                    <SelectItem value="In Progress">In Progress</SelectItem>
-                    <SelectItem value="Resolved">Resolved</SelectItem>
+                    {ISSUE_TYPES.map((t) => (
+                      <SelectItem key={t} value={t}>{t}</SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>
@@ -328,25 +366,106 @@ function ComplaintsPage() {
                 </Select>
               </div>
             </div>
+
             <div className="space-y-2">
-              <Label>Assigned engineer</Label>
-              <Select value={editAssignee} onValueChange={setEditAssignee}>
-                <SelectTrigger><SelectValue placeholder="Unassigned" /></SelectTrigger>
-                <SelectContent>
-                  {ENGINEERS.map((e) => (
-                    <SelectItem key={e} value={e}>{e}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <Label htmlFor="edit-description">Description</Label>
+              <Textarea
+                id="edit-description"
+                value={editDescription}
+                onChange={(e) => setEditDescription(e.target.value)}
+                placeholder="Describe the issue reported by the customer…"
+                rows={3}
+              />
             </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label>Status</Label>
+                <Select value={editStatus} onValueChange={(v) => setEditStatus(v as ComplaintStatus)}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="Open">Open</SelectItem>
+                    <SelectItem value="In Progress">In Progress</SelectItem>
+                    <SelectItem value="Resolved">Resolved</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Assigned engineer</Label>
+                <Select value={editAssignee} onValueChange={setEditAssignee}>
+                  <SelectTrigger><SelectValue placeholder="Unassigned" /></SelectTrigger>
+                  <SelectContent>
+                    {ENGINEERS.map((e) => (
+                      <SelectItem key={e} value={e}>{e}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="edit-alt-phone">Alternate mobile</Label>
+                <Input
+                  id="edit-alt-phone"
+                  value={editAltPhone}
+                  onChange={(e) => setEditAltPhone(e.target.value)}
+                  placeholder="e.g. 98220 55667"
+                />
+              </div>
+              {/* Show serial link field only when this complaint has no serial yet */}
+              {editing && !editing.serialNo && (
+                <div className="space-y-2">
+                  <Label htmlFor="edit-serial">Link serial number</Label>
+                  <Popover open={editSerialOpen} onOpenChange={setEditSerialOpen}>
+                    <PopoverTrigger asChild>
+                      <Button variant="outline" className="w-full justify-between font-normal">
+                        {editSerialNumber || "Select from warranty…"}
+                        <ChevronsUpDown className="h-4 w-4 text-muted-foreground" />
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-[--radix-popover-trigger-width] p-0" align="start">
+                      <Command>
+                        <CommandInput placeholder="Search serial number…" />
+                        <CommandList>
+                          <CommandEmpty>No matching serial number.</CommandEmpty>
+                          <CommandGroup label="Available Warranties">
+                            {warranties.map((w) => (
+                              <CommandItem
+                                key={w.id}
+                                value={w.serialNo}
+                                onSelect={() => {
+                                  setEditSerialNumber(w.serialNo);
+                                  setEditSerialOpen(false);
+                                }}
+                              >
+                                <Check className={`h-4 w-4 ${editSerialNumber === w.serialNo ? "opacity-100" : "opacity-0"}`} />
+                                <span className="font-medium">{w.serialNo}</span>
+                                <span className="ml-2 truncate text-xs text-muted-foreground">
+                                  {w.model} · {w.customerName}
+                                </span>
+                              </CommandItem>
+                            ))}
+                          </CommandGroup>
+                        </CommandList>
+                      </Command>
+                      <div className="border-t p-2 text-xs text-muted-foreground">
+                        💡 Only verified warranty serial numbers shown. If serial not listed, leave blank.
+                      </div>
+                    </PopoverContent>
+                  </Popover>
+                </div>
+              )}
+            </div>
+
             <div className="space-y-2">
-              <Label htmlFor="edit-note">Add note</Label>
+              <Label htmlFor="edit-note">Add internal note</Label>
               <Textarea
                 id="edit-note"
                 value={editNote}
                 onChange={(e) => setEditNote(e.target.value)}
                 placeholder="e.g. Spare part ordered, visit scheduled…"
-                rows={3}
+                rows={2}
               />
             </div>
           </div>

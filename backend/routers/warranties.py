@@ -215,3 +215,78 @@ async def get_warranty_detail(
         error=None,
         timestamp=datetime.utcnow().isoformat(),
     )
+
+@router.put("/warranties/{serial_number}", response_model=ApiResponse)
+async def update_warranty_endpoint(
+    serial_number: str,
+    request: Request,
+    productName: Optional[str] = Form(None),
+    purchaseDate: Optional[str] = Form(None),
+    warrantyMonths: Optional[int] = Form(None),
+    customerName: Optional[str] = Form(None),
+    phone: Optional[str] = Form(None),
+    email: Optional[str] = Form(None),
+    address: Optional[str] = Form(None),
+    dealerName: Optional[str] = Form(None),
+    dealerLocation: Optional[str] = Form(None),
+):
+    """Update warranty details"""
+    claims = get_current_user(request)
+    
+    update_data = {}
+    if productName is not None:
+        update_data["productName"] = productName
+    if purchaseDate is not None:
+        update_data["purchaseDate"] = purchaseDate
+    if warrantyMonths is not None:
+        update_data["warrantyMonths"] = warrantyMonths
+    if customerName is not None:
+        update_data["customerName"] = customerName
+    if phone is not None:
+        update_data["phone"] = phone
+    if email is not None:
+        update_data["email"] = email
+    if address is not None:
+        update_data["address"] = address
+    if dealerName is not None:
+        update_data["dealerName"] = dealerName
+    if dealerLocation is not None:
+        update_data["dealerLocation"] = dealerLocation
+
+    if not update_data:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No fields to update"
+        )
+    
+    try:
+        updated = await db_update_warranty(serial_number, update_data)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Warranty not found"
+        )
+    
+    return ApiResponse(
+        success=True,
+        data={
+            "warrantyId": updated.get("EntityId"),
+            "serialNumber": updated.get("SerialNumber", serial_number),
+            "productName": updated.get("ProductName"),
+            "productCategory": updated.get("ProductCategory", "Television"),
+            "purchaseDate": updated.get("PurchaseDate"),
+            "warrantyEndDate": updated.get("WarrantyEndDate"),
+            "status": updated.get("Status"),
+            "invoicePaths": updated.get("InvoicePaths", [updated["InvoicePath"]] if updated.get("InvoicePath") else []),
+            "customerName": updated.get("CustomerName"),
+            "phone": updated.get("Phone"),
+            "email": updated.get("Email"),
+            "address": updated.get("Address"),
+            "dealerName": updated.get("DealerName"),
+            "dealerLocation": updated.get("DealerLocation"),
+            "createdAt": updated.get("CreatedAt"),
+            "updatedAt": updated.get("UpdatedAt"),
+        },
+        error=None,
+        timestamp=datetime.utcnow().isoformat(),
+    )

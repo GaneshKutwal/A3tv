@@ -13,6 +13,7 @@ import apiClient, {
   logout as apiLogout,
   createWarranty,
   getWarranties,
+  updateWarranty as apiUpdateWarranty,
   createComplaint,
   getComplaints,
   updateComplaint as apiUpdateComplaint,
@@ -52,12 +53,17 @@ export interface ComplaintNote {
 export interface Complaint {
   id: string;
   serialNo: string;
+  /** Customer name — populated when complaint was registered without a serial number */
+  customerName?: string;
+  /** Primary phone — populated when complaint was registered without a serial number */
+  phone?: string;
   issueType: string;
   priority: ComplaintPriority;
   description: string;
   status: ComplaintStatus;
   loggedBy: string;
   assignedTo: string | null;
+  alternatePhone?: string;
   createdAt: string;
   resolvedAt?: string;
   resolutionNote?: string;
@@ -125,10 +131,10 @@ function mapWarranty(raw: any): Warranty {
       // derive from warrantyEndDate if available
       (raw.warrantyEndDate && raw.purchaseDate
         ? Math.round(
-            (new Date(raw.warrantyEndDate).getTime() -
-              new Date(raw.purchaseDate).getTime()) /
-              (30 * 24 * 3600 * 1000)
-          )
+          (new Date(raw.warrantyEndDate).getTime() -
+            new Date(raw.purchaseDate).getTime()) /
+          (30 * 24 * 3600 * 1000)
+        )
         : 24),
     dealerName: raw.dealerName ?? "",
     dealerLocation: raw.dealerLocation ?? "",
@@ -166,12 +172,15 @@ function mapComplaint(raw: any): Complaint {
   return {
     id: raw.complaintId ?? raw.id ?? "",
     serialNo: raw.serialNumber ?? raw.serialNo ?? "",
+    customerName: raw.customerName ?? raw.CustomerName ?? "",
+    phone: raw.phone ?? raw.Phone ?? "",
     issueType: raw.issueType ?? descriptionLines[0] ?? "Other",
     priority: normalisePriority(raw.priority),
     description: raw.issueType ? rawDescription : descriptionLines.slice(1).join("\n").trim() || rawDescription,
     status: normaliseStatus(raw.status),
     loggedBy: userIdentity(raw.loggedBy ?? raw.LoggedBy ?? raw.userId),
     assignedTo: raw.assignedTo ?? null,
+    alternatePhone: raw.alternatePhone ?? raw.AlternatePhone ?? "",
     createdAt: raw.createdAt ?? new Date().toISOString(),
     resolvedAt: raw.resolvedAt,
     resolutionNote: raw.resolutionNotes ?? raw.resolutionNote,
@@ -199,8 +208,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const token = localStorage.getItem("authToken");
     const savedUser = localStorage.getItem("currentUser");
+
     if (token && savedUser) {
-      setUser(savedUser);
+      try {
+        const part = token.split(".")[1];
+        if (part) {
+          const payload = JSON.parse(atob(part));
+          // If token has expired, log out immediately
+          if (payload.exp && payload.exp * 1000 <= Date.now()) {
+            localStorage.removeItem("authToken");
+            localStorage.removeItem("refreshToken");
+            localStorage.removeItem("currentUser");
+            setUser(null);
+          } else {
+            setUser(savedUser);
+          }
+        } else {
+          setUser(savedUser);
+        }
+      } catch {
+        setUser(savedUser);
+      }
     }
     setLoading(false);
   }, []);
@@ -212,15 +240,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const loginData = response.data?.data ?? response.data;
       const { access_token, accessToken } = loginData;
       const token = access_token ?? accessToken;
-      const identity = loginData.user?.email ?? username;
-      const displayName = loginData.user?.name ?? identity;
+      const identity = loginData.user?.name ?? loginData.user?.username ?? username;
       localStorage.setItem("authToken", token);
       if (loginData.refreshToken) {
         localStorage.setItem("refreshToken", loginData.refreshToken);
       }
       localStorage.setItem("currentUser", identity);
       setUser(identity);
-      toast.success(`Welcome, ${displayName}`);
+      toast.success(`Welcome, ${identity}`);
     } catch (error: any) {
       const message = error.response?.data?.error ?? error.response?.data?.detail ?? "Invalid credentials";
       toast.error(message);
@@ -268,6 +295,7 @@ interface DataState {
   fetchWarranties: (filters?: any) => Promise<void>;
   fetchComplaints: (filters?: any) => Promise<void>;
   addWarranty: (formData: FormData) => Promise<Warranty>;
+  updateWarranty: (serialNo: string, formData: FormData) => Promise<Warranty>;
   addComplaint: (formData: FormData) => Promise<Complaint>;
   updateComplaint: (
     complaintId: string,
@@ -275,7 +303,11 @@ interface DataState {
       status?: ComplaintStatus;
       priority?: ComplaintPriority;
       assignedTo?: string | null;
+      alternatePhone?: string | undefined;
       description?: string;
+      serialNumber?: string;
+      customerName?: string;
+      phone?: string;
     },
     note: string,
     by: string
@@ -348,6 +380,24 @@ export function DataProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  const updateWarranty = useCallback(async (serialNo: string, formData: FormData): Promise<Warranty> => {
+    try {
+      const response = await apiUpdateWarranty(serialNo, formData);
+      const raw = response.data?.data ?? response.data;
+      const updated = mapWarranty(raw);
+      setWarranties((prev) =>
+        prev.map((w) => (w.serialNo === serialNo ? updated : w)).sort(compareWarrantySerialNumbers)
+      );
+      warrantiesLoadedAt.current = Date.now();
+      toast.success("Warranty updated successfully");
+      return updated;
+    } catch (err: any) {
+      const message = err.response?.data?.error ?? err.response?.data?.detail ?? "Failed to update warranty";
+      toast.error(message);
+      throw err;
+    }
+  }, []);
+
   // ── Complaints ──
 
   const fetchComplaints = useCallback(async (filters?: any) => {
@@ -401,7 +451,11 @@ export function DataProvider({ children }: { children: ReactNode }) {
         status?: ComplaintStatus;
         priority?: ComplaintPriority;
         assignedTo?: string | null;
+        alternatePhone?: string | undefined;
         description?: string;
+        serialNumber?: string;
+        customerName?: string;
+        phone?: string;
       },
       note: string,
       by: string
@@ -415,7 +469,13 @@ export function DataProvider({ children }: { children: ReactNode }) {
         if (fields.assignedTo !== undefined) {
           formData.append("assignedTo", fields.assignedTo ?? "");
         }
+        if (fields.alternatePhone !== undefined) {
+          formData.append("alternatePhone", fields.alternatePhone);
+        }
         if (fields.description) formData.append("description", fields.description);
+        if (fields.serialNumber?.trim()) formData.append("serialNumber", fields.serialNumber.trim());
+        if (fields.customerName !== undefined) formData.append("customerName", fields.customerName);
+        if (fields.phone !== undefined) formData.append("phone", fields.phone);
         if (note.trim()) {
           formData.append("note", note.trim());
           formData.append("noteBy", by);
@@ -476,13 +536,13 @@ export function DataProvider({ children }: { children: ReactNode }) {
               notes: Array.isArray(raw.notes)
                 ? raw.notes
                 : [
-                    ...c.notes,
-                    { text: resolutionNote, at: new Date().toISOString(), by },
-                  ],
+                  ...c.notes,
+                  { text: resolutionNote, at: new Date().toISOString(), by },
+                ],
             };
           })
         );
-          complaintsLoadedAt.current = Date.now();
+        complaintsLoadedAt.current = Date.now();
         toast.success("Complaint resolved");
       } catch (err: any) {
         const message = err.response?.data?.error ?? err.response?.data?.detail ?? "Failed to resolve complaint";
@@ -503,6 +563,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
         fetchWarranties,
         fetchComplaints,
         addWarranty,
+        updateWarranty,
         addComplaint,
         updateComplaint,
         resolveComplaint,
@@ -522,8 +583,8 @@ export function useData() {
 // ─── Backwards-compat hooks (used by dashboard) ───────────────────────────────
 
 export function useWarranties() {
-  const { warranties, loadingWarranties: loading, fetchWarranties, addWarranty } = useData();
-  return { warranties, loading, fetchWarranties, addWarranty };
+  const { warranties, loadingWarranties: loading, fetchWarranties, addWarranty, updateWarranty } = useData();
+  return { warranties, loading, fetchWarranties, addWarranty, updateWarranty };
 }
 
 export function useComplaints() {

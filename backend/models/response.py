@@ -45,6 +45,7 @@ class ComplaintResponse(BaseModel):
     description: str
     priority: str
     status: str
+    alternatePhone: Optional[str] = None
     createdAt: str
     updatedAt: str
     attachmentCount: int = 0

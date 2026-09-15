@@ -15,21 +15,37 @@ const apiClient = axios.create({
   },
 });
 
-// Attach JWT token to every request
+// Attach JWT token to every request; if token is expired, clear session and log out
 apiClient.interceptors.request.use((config) => {
   const token = localStorage.getItem('authToken');
   if (token) {
+    try {
+      const part = token.split('.')[1];
+      if (part) {
+        const payload = JSON.parse(atob(part));
+        if (payload.exp && payload.exp * 1000 <= Date.now()) {
+        localStorage.removeItem('authToken');
+        localStorage.removeItem('refreshToken');
+        localStorage.removeItem('currentUser');
+          window.location.href = '/';
+          return Promise.reject(new Error('Session expired'));
+        }
+      }
+    } catch {
+      // ignore parsing errors
+    }
     config.headers.Authorization = `Bearer ${token}`;
   }
   return config;
 });
 
-// Handle 401 — token expired → redirect to login
+// Handle 401/403 — token expired on backend → redirect to login
 apiClient.interceptors.response.use(
   (response) => response,
   async (error) => {
-    if (error.response?.status === 401) {
+    if (error.response?.status === 401 || error.response?.status === 403) {
       localStorage.removeItem('authToken');
+      localStorage.removeItem('refreshToken');
       localStorage.removeItem('currentUser');
       window.location.href = '/';
     }
@@ -85,7 +101,8 @@ export const login = async (username: string, password: string) => {
   }
 
   const result = response.data.AuthenticationResult;
-  const idTokenClaims = JSON.parse(atob(result.IdToken.split('.')[1]));
+  const idTokenPart = result.IdToken.split('.')[1];
+  const idTokenClaims = idTokenPart ? JSON.parse(atob(idTokenPart)) : {};
   return {
     data: {
       accessToken: result.IdToken,
@@ -118,6 +135,12 @@ export const getWarranties = (filters?: Record<string, any>) =>
 /** Get a single warranty by serial number */
 export const getWarranty = (serialNo: string) =>
   apiClient.get(`/warranties/${serialNo}`);
+
+/** Update warranty details — FormData (multipart) */
+export const updateWarranty = (serialNo: string, formData: FormData) =>
+  apiClient.put(`/warranties/${serialNo}`, formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  });
 
 // ─── Complaints ───────────────────────────────────────────────────────────────
 

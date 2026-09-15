@@ -175,6 +175,7 @@ function HistoryPage() {
                           </div>
                           <p className="text-xs text-muted-foreground">
                             Logged by {c.loggedBy}
+                            {c.alternatePhone ? ` · Alt contact: ${c.alternatePhone}` : ""}
                             {c.resolvedAt ? ` · Resolved ${format(new Date(c.resolvedAt), "dd MMM yyyy")}` : ""}
                           </p>
                           {c.resolutionNote && (

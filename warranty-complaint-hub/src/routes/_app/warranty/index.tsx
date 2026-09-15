@@ -1,8 +1,9 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useMemo, useState, useEffect } from "react";
 import { format } from "date-fns";
-import { Search, CalendarIcon, FileSpreadsheet, X } from "lucide-react";
+import { Search, CalendarIcon, FileSpreadsheet, Pencil, X } from "lucide-react";
 import type { DateRange } from "react-day-picker";
+import { toast } from "sonner";
 
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -10,6 +11,23 @@ import { Badge } from "@/components/ui/badge";
 import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   Sheet,
   SheetContent,
@@ -41,15 +59,75 @@ export const Route = createFileRoute("/_app/warranty/")({
 });
 
 function WarrantyListPage() {
-  const { warranties, loadingWarranties, fetchWarranties } = useData();
+  const { warranties, loadingWarranties, fetchWarranties, updateWarranty } = useData();
   const [serialQuery, setSerialQuery] = useState("");
   const [productQuery, setProductQuery] = useState("");
   const [range, setRange] = useState<DateRange | undefined>();
   const [selected, setSelected] = useState<Warranty | null>(null);
 
+  // Edit warranty state
+  const [editingWarranty, setEditingWarranty] = useState<Warranty | null>(null);
+  const [editCustomerName, setEditCustomerName] = useState("");
+  const [editPhone, setEditPhone] = useState("");
+  const [editEmail, setEditEmail] = useState("");
+  const [editAddress, setEditAddress] = useState("");
+  const [editModel, setEditModel] = useState("");
+  const [editPurchaseDate, setEditPurchaseDate] = useState("");
+  const [editDuration, setEditDuration] = useState("24");
+  const [editDealerName, setEditDealerName] = useState("");
+  const [editDealerLocation, setEditDealerLocation] = useState("");
+  const [editSaving, setEditSaving] = useState(false);
+
   useEffect(() => {
     fetchWarranties();
   }, []);
+
+  const openEditWarranty = (w: Warranty, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    setEditingWarranty(w);
+    setEditCustomerName(w.customerName);
+    setEditPhone(w.phone);
+    setEditEmail(w.email);
+    setEditAddress(w.address);
+    setEditModel(w.model);
+    setEditPurchaseDate(w.purchaseDate ? w.purchaseDate.slice(0, 10) : "");
+    setEditDuration(String(w.durationMonths || 24));
+    setEditDealerName(w.dealerName);
+    setEditDealerLocation(w.dealerLocation);
+  };
+
+  const saveWarrantyEdit = async () => {
+    if (!editingWarranty) return;
+    if (!editCustomerName.trim() || !editPhone.trim()) {
+      toast.error("Customer name and phone number are required");
+      return;
+    }
+    const formData = new FormData();
+    formData.append("customerName", editCustomerName.trim());
+    formData.append("phone", editPhone.trim());
+    formData.append("email", editEmail.trim());
+    formData.append("address", editAddress.trim());
+    formData.append("productName", editModel.trim() || "A3 Television");
+    if (editPurchaseDate) {
+      formData.append("purchaseDate", editPurchaseDate);
+    }
+    formData.append("warrantyMonths", editDuration);
+    formData.append("dealerName", editDealerName.trim());
+    formData.append("dealerLocation", editDealerLocation.trim());
+
+    try {
+      setEditSaving(true);
+      const updated = await updateWarranty(editingWarranty.serialNo, formData);
+      if (selected && selected.serialNo === editingWarranty.serialNo) {
+        setSelected(updated);
+      }
+      setEditingWarranty(null);
+    } catch {
+      // toast handled in updateWarranty
+    } finally {
+      setEditSaving(false);
+    }
+  };
 
   const filtered = useMemo(() => {
     return warranties.filter((w) => {
@@ -163,6 +241,7 @@ function WarrantyListPage() {
                 <TableHead>Warranty Ends</TableHead>
                 <TableHead>Dealer</TableHead>
                 <TableHead>Status</TableHead>
+                <TableHead className="text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -194,12 +273,22 @@ function WarrantyListPage() {
                         </Badge>
                       )}
                     </TableCell>
+                    <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="gap-1"
+                        onClick={(e) => openEditWarranty(w, e)}
+                      >
+                        <Pencil className="h-3.5 w-3.5" /> Update
+                      </Button>
+                    </TableCell>
                   </TableRow>
                 );
               })}
               {filtered.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={8} className="h-24 text-center text-muted-foreground">
+                  <TableCell colSpan={9} className="h-24 text-center text-muted-foreground">
                     No warranties match these filters.
                   </TableCell>
                 </TableRow>
@@ -213,9 +302,19 @@ function WarrantyListPage() {
         <SheetContent className="w-full sm:max-w-md">
           {selected && (
             <>
-              <SheetHeader>
-                <SheetTitle className="font-display">{selected.serialNo}</SheetTitle>
-                <SheetDescription>{selected.model}</SheetDescription>
+              <SheetHeader className="flex flex-row items-start justify-between space-y-0 pb-2">
+                <div>
+                  <SheetTitle className="font-display">{selected.serialNo}</SheetTitle>
+                  <SheetDescription>{selected.model}</SheetDescription>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="gap-1"
+                  onClick={() => openEditWarranty(selected)}
+                >
+                  <Pencil className="h-3.5 w-3.5" /> Update
+                </Button>
               </SheetHeader>
               <div className="space-y-5 px-4 pb-6">
                 <Badge
@@ -276,6 +375,115 @@ function WarrantyListPage() {
           )}
         </SheetContent>
       </Sheet>
+
+      {/* Update Warranty Dialog */}
+      <Dialog open={!!editingWarranty} onOpenChange={(o) => !o && setEditingWarranty(null)}>
+        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Update Warranty — {editingWarranty?.serialNo}</DialogTitle>
+            <DialogDescription>
+              Modify customer, product, or dealer details for this warranty.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 py-2 sm:grid-cols-2">
+            <div className="space-y-2">
+              <Label htmlFor="edit-customer-name">Full Name *</Label>
+              <Input
+                id="edit-customer-name"
+                value={editCustomerName}
+                onChange={(e) => setEditCustomerName(e.target.value)}
+                placeholder="e.g. Rahul Mehta"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="edit-phone">Phone Number *</Label>
+              <Input
+                id="edit-phone"
+                value={editPhone}
+                onChange={(e) => setEditPhone(e.target.value)}
+                placeholder="e.g. 98220 11445"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="edit-email">Email</Label>
+              <Input
+                id="edit-email"
+                type="email"
+                value={editEmail}
+                onChange={(e) => setEditEmail(e.target.value)}
+                placeholder="customer@mail.com"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="edit-model">Model</Label>
+              <Input
+                id="edit-model"
+                value={editModel}
+                onChange={(e) => setEditModel(e.target.value)}
+                placeholder='A3 NeoView 43"'
+              />
+            </div>
+            <div className="space-y-2 sm:col-span-2">
+              <Label htmlFor="edit-address">Address</Label>
+              <Textarea
+                id="edit-address"
+                value={editAddress}
+                onChange={(e) => setEditAddress(e.target.value)}
+                placeholder="Street, city"
+                rows={2}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="edit-purchase-date">Purchase Date</Label>
+              <Input
+                id="edit-purchase-date"
+                type="date"
+                value={editPurchaseDate}
+                onChange={(e) => setEditPurchaseDate(e.target.value)}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Warranty Duration</Label>
+              <Select value={editDuration} onValueChange={setEditDuration}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {[12, 24, 36, 48].map((m) => (
+                    <SelectItem key={m} value={String(m)}>
+                      {m} months
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="edit-dealer-name">Dealer Name</Label>
+              <Input
+                id="edit-dealer-name"
+                value={editDealerName}
+                onChange={(e) => setEditDealerName(e.target.value)}
+                placeholder="e.g. Shree Electronics"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="edit-dealer-location">Dealer Location</Label>
+              <Input
+                id="edit-dealer-location"
+                value={editDealerLocation}
+                onChange={(e) => setEditDealerLocation(e.target.value)}
+                placeholder="e.g. Pune"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setEditingWarranty(null)} disabled={editSaving}>
+              Cancel
+            </Button>
+            <Button onClick={saveWarrantyEdit} disabled={editSaving}>
+              {editSaving ? "Saving…" : "Save Changes"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
